@@ -1,8 +1,14 @@
 ---
 mmdebstrap:
-  customize-hooks:
-    # Add Raspberry Pi OS repo (Bookworm, arm64) with signed-by= key we seeded
+  setup-hooks:
+    # Put key in place before apt runs
+    - mkdir -p $1/usr/share/keyrings
+    - sync-in ${KS_TOP}/out/keys/ /usr/share/keyrings
+    # Add repo that uses the key
     - mkdir -p $1/etc/apt/sources.list.d
     - bash -eux -c 'echo "deb [arch=arm64 signed-by=/usr/share/keyrings/raspberrypi-archive-keyring.gpg] http://archive.raspberrypi.org/debian bookworm main" > "$1/etc/apt/sources.list.d/raspios.list"'
+    # Optional: create the alt symlink if your key is named differently
+    - bash -eux -c '[ -e "$1/usr/share/keyrings/raspberrypi-archive-keyring.gpg" ] || ln -sf raspberrypi-archive-stable.gpg "$1/usr/share/keyrings/raspberrypi-archive-keyring.gpg"'
+
   packages:
-    - raspberrypi-archive-keyring
+    - raspberrypi-archive-keyring 
