@@ -322,7 +322,7 @@ fi
 
 # Auto-selected layers
 if ksconf_isy device_ssh_user1 ; then
-   layer_push auto net-misc/openssh-server
+   layer_push auto common/openssh-server
 fi
 
 
