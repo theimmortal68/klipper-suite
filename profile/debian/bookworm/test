@@ -1,4 +1,6 @@
 # Minimal system with v8 kernel, apt, rpi utils and wired networking
 
-debian/bookworm/arm64/base-apt
-rpi/debian/bookworm/apt
+common/base
+common/network
+common/user
+rpi/repo

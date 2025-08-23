@@ -1,0 +1,83 @@
+---
+name: base
+mmdebstrap:
+  architectures:
+    - arm64
+  mode: auto
+  variant: custom
+  suite: bookworm
+  mirrors:
+    - deb http://deb.debian.org/debian bookworm main contrib non-free non-free-firmware
+    - deb http://deb.debian.org/debian-security bookworm-security main contrib non-free non-free-firmware
+    - deb http://deb.debian.org/debian bookworm-updates main contrib non-free non-free-firmware
+  packages:
+    - systemd
+    - systemd-sysv
+    - systemd-timesyncd
+    - perl
+    - findutils
+    - dpkg
+    - libc-bin
+    - base-files
+    - base-passwd
+    - debianutils
+    - bash
+    - diffutils
+    - util-linux
+    - sed
+    - grep
+    - gzip
+    - udev
+    - e2fsprogs
+    - login
+  setup-hooks:
+    - mkdir -p $1/bin
+    - ln -s bash $1/bin/sh
+  essential-hooks:
+    - echo tzdata tzdata/Areas select "$KSconf_device_timezone_area"
+        | chroot $1 debconf-set-selections
+    - echo tzdata tzdata/Zones/$KSconf_device_timezone_area select "$KSconf_device_timezone_city"
+        | chroot $1 debconf-set-selections
+    - echo locales locales/locales_to_be_generated multiselect "$KSconf_device_locale1"
+        | chroot $1 debconf-set-selections
+    - echo locales locales/default_environment_locale select "$KSconf_device_locale1"
+        | chroot $1 debconf-set-selections
+    - echo keyboard-configuration keyboard-configuration/variant select "$KSconf_device_keyboard_layout"
+        | chroot $1 debconf-set-selections
+    - echo keyboard-configuration keyboard-configuration/xkb-keymap select "$KSconf_device_keyboard_keymap"
+        | chroot $1 debconf-set-selections
+  aptopts:
+    - APT::Install-Suggests "false"
+    - APT::Install-Recommends "false"
+  dpkgopts:
+    - path-exclude=/usr/share/man/*
+    - path-include=/usr/share/man/man[1-9]/*
+    - path-exclude=/usr/share/locale/*
+    - path-include=/usr/share/locale/locale.alias
+    - path-exclude=/usr/share/doc/*
+    - path-include=/usr/share/doc/*/copyright
+    - path-include=/usr/share/doc/*/changelog.Debian.*
+    - path-exclude=/usr/share/{doc,info,man,omf,help,gnome/help}/*
+    - path-exclude=/usr/share/lintian/*
+  customize-hooks:
+    - |-
+      # Run everything inside the target rootfs
+      chroot "$1" /bin/sh -eu -c '
+        # Enable time sync
+        systemctl enable systemd-timesyncd
+
+        # Persistent journal (directory + group) and size cap (~100 MB total)
+        install -d -m 2755 /var/log/journal
+        chown root:systemd-journal /var/log/journal
+        install -d -m 0755 /etc/systemd/journald.conf.d
+        printf %s\n "        [Journal]" "        SystemMaxUse=100M" > /etc/systemd/journald.conf.d/99-rotate.conf
+
+        # Keep TTY1 output visible after boot
+        install -d -m 0755 /etc/systemd/system/getty@tty1.service.d
+        printf %s\n "        [Service]" "        TTYVTDisallocate=no" > /etc/systemd/system/getty@tty1.service.d/noclear.conf
+
+        # Neutralize udev default link renames for predictable names
+        install -d -m 0755 /etc/systemd/network
+        ln -sf /dev/null /etc/systemd/network/99-default.link
+        ln -sf /dev/null /etc/systemd/network/73-usb-net-by-mac.link
+      '

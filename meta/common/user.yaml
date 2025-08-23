@@ -1,0 +1,73 @@
+---
+name: user
+mmdebstrap:
+  variant: apt
+  packages: []   # NOTE: assumes 'sudo' comes from ratos-prerequisite
+  customize-hooks:
+    # Ensure the user exists (no password yet)
+    - >
+      chroot "$1" sh -eu -c '
+        U="${KSconf_device_user:-${KSconf_device_user1:-}}"
+        : "${U:?KSconf_device_user or KSconf_device_user1 must be set}"
+        if ! id -u "$U" >/dev/null 2>&1; then
+          adduser --disabled-password --gecos "" "$U"
+        fi
+      '
+
+    # Set the password if provided (plaintext or crypt hash)
+    - >
+      chroot "$1" sh -eu -c '
+        U="${KSconf_device_user:-${KSconf_device_user1:-}}"
+        P="${KSconf_device_password:-${KSconf_device_password1:-}}"
+        if [ -n "${P:-}" ]; then
+          case "$P" in
+            \$6\$*|\$5\$*|\$2*|\$y\$*|\$argon2*) echo "$U:$P" | chpasswd -e ;;
+            *)                                   echo "$U:$P" | chpasswd    ;;
+          esac
+        fi
+      '
+
+    # Lock root account
+    - 'chroot "$1" usermod -p "*" root'
+
+    # Ensure expected groups exist (harmless if already present)
+    - >
+      chroot "$1" sh -eu -c '
+        for GRP in input spi i2c gpio render; do
+          getent group "$GRP" >/dev/null || groupadd -r "$GRP"
+        done
+      '
+
+    # Add the device user to groups (authoritative here)
+    - >
+      chroot "$1" sh -eu -c '
+        U="${KSconf_device_user:-${KSconf_device_user1:-}}"
+        for GRP in adm dialout cdrom audio users sudo video games plugdev input spi i2c gpio tty render; do
+          adduser "$U" "$GRP"
+        done
+      '
+
+    # Sudoers drop-in (from template), with correct perms/ownership
+    - >
+      /bin/sh -eu -c '
+        U="${KSconf_device_user:-${KSconf_device_user1:-}}"
+        : "${U:?KSconf_device_user or KSconf_device_user1 must be set}"
+        D="$1/etc/sudoers.d"
+        install -d -m 0755 "$D"
+        sed "s/^pi /$U /" "$KS_TEMPLATES/sudo/010_pi-nopasswd" > "$D/010_pi-nopasswd"
+        chmod 0440 "$D/010_pi-nopasswd"
+        chroot "$1" sh -eu -c "chown root:root /etc/sudoers.d/010_pi-nopasswd; command -v visudo >/dev/null && visudo -cf /etc/sudoers.d/010_pi-nopasswd || true"
+      '
+
+    # PATH normalization for non-root shells
+    - >
+      /bin/sh -eu -c '
+        install -d -m 0755 "$1/etc/profile.d"
+        cat >"$1/etc/profile.d/01local.sh" <<'"'"'SH'"'"'
+#!/bin/sh
+if [ "$(id -u)" -ne 0 ]; then
+  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games
+fi
+SH
+        chmod 0644 "$1/etc/profile.d/01local.sh"
+      '
