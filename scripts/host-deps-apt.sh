@@ -18,6 +18,7 @@ sudo apt-get install -y \
   grep \
   mtools \
   zstd \
+  podman \
   dbus-user-session
 
 # Enable qemu-aarch64 binfmt if available (for cross-building arm64 on x86_64)
