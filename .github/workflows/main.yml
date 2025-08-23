@@ -87,7 +87,7 @@ jobs:
           KSconf_sys_apt_cache_dir: ${{ env.APT_CACHE_DIR }}
         run: |
           set -euxo pipefail
-          ./build.sh -c generic64-test.cfg
+          ./build.sh -c config/generic64-test.cfg
           # post-image.sh already writes compressed .zst files to work/*/deploy/
 
       - name: Stage outputs (runner-owned; no root perms)
