@@ -14,7 +14,12 @@ sudo apt-get install -y \
   rsync \
   zstd \
   tar \
-  util-linux
+  util-linux \
+  realpath:coreutils \
+  grep \
+  mtools \
+  zstd \
+  dbus-user-session
 
 # Enable qemu-aarch64 binfmt if available (for cross-building arm64 on x86_64)
 sudo update-binfmts --enable qemu-aarch64 || true
