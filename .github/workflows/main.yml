@@ -20,39 +20,39 @@ jobs:
       NEEDRESTART_MODE: a
 
     steps:
-      # # Expand usable disk (merge / and /mnt; add swap; remove big preinstalls)
-      # - name: Maximize build disk space
-      #   uses: easimon/maximize-build-space@v1
-      #   with:
-      #     root-reserve-mb: 512
-      #     swap-size-mb: 4096
-      #     # aggressively free space from preinstalled SDKs/images you don't use
-      #     remove-dotnet: 'true'
-      #     remove-android: 'true'
-      #     remove-haskell: 'true'
-      #     # build-mount-path defaults to $GITHUB_WORKSPACE
+      # Expand usable disk (merge / and /mnt; add swap; remove big preinstalls)
+      - name: Maximize build disk space
+        uses: easimon/maximize-build-space@v1
+        with:
+          root-reserve-mb: 512
+          swap-size-mb: 4096
+          # aggressively free space from preinstalled SDKs/images you don't use
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          # build-mount-path defaults to $GITHUB_WORKSPACE
 
-      # # ensure the newly mounted workspace is writable by 'runner'
-      # - name: Fix workspace ownership
-      #   run: sudo chown -R "$USER":"$USER" "$GITHUB_WORKSPACE"
+      # ensure the newly mounted workspace is writable by 'runner'
+      - name: Fix workspace ownership
+        run: sudo chown -R "$USER":"$USER" "$GITHUB_WORKSPACE"
 
-      # - name: Extra cleanup (CodeQL, Docker images, cached tools, Homebrew)
-      #   run: |
-      #     set -eux
-      #     # CodeQL
-      #     sudo rm -rf /opt/hostedtoolcache/CodeQL || true
-      #     # Docker images
-      #     if command -v docker >/dev/null 2>&1; then
-      #       sudo docker image prune -af || true
-      #       sudo docker system prune -af --volumes || true
-      #     fi
-      #     # Hosted toolcache (old SDKs/toolchains)
-      #     sudo rm -rf /opt/hostedtoolcache/* || true
-      #     # Homebrew (on ubuntu images it’s under /home/linuxbrew)
-      #     sudo rm -rf /home/linuxbrew /home/runner/.linuxbrew || true
-      #     # Misc caches
-      #     sudo rm -rf /usr/local/lib/android || true
-      #     sudo rm -rf /usr/local/share/powershell || true
+      - name: Extra cleanup (CodeQL, Docker images, cached tools, Homebrew)
+        run: |
+          set -eux
+          # CodeQL
+          sudo rm -rf /opt/hostedtoolcache/CodeQL || true
+          # Docker images
+          if command -v docker >/dev/null 2>&1; then
+            sudo docker image prune -af || true
+            sudo docker system prune -af --volumes || true
+          fi
+          # Hosted toolcache (old SDKs/toolchains)
+          sudo rm -rf /opt/hostedtoolcache/* || true
+          # Homebrew (on ubuntu images it’s under /home/linuxbrew)
+          sudo rm -rf /home/linuxbrew /home/runner/.linuxbrew || true
+          # Misc caches
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /usr/local/share/powershell || true
 
       - name: Checkout
         uses: actions/checkout@v4
