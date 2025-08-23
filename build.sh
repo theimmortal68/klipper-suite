@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build a Bookworm ARM64 Raspberry Pi–style image using bdebstrap + genimage,
-# with selectable DEVICE and PROFILE, colorized output, and preseeded RPi repo key.
+# with selectable DEVICE and PROFILE, colorized output,
+# and preseeded Debian + Raspberry Pi repo keyrings.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -56,7 +57,8 @@ if [[ -f "${ROOT}/devices/${KS_DEVICE}/layers.yaml" ]]; then
 fi
 command -v qemu-aarch64-static >/dev/null 2>&1 || warn "qemu-aarch64-static not found; required to cross-build arm64 on x86_64."
 
-# ------------------------- defaults for RPi repo knobs ------------------------
+# ------------------------- defaults for repo/key seeding ----------------------
+# Raspberry Pi repo (key + source)
 : "${KS_ENABLE_RPI_REPO:=1}"
 : "${KS_RPI_REPO_URL:=http://archive.raspberrypi.org/debian}"
 : "${KS_RPI_REPO_COMPONENTS:=main}"
@@ -64,6 +66,11 @@ command -v qemu-aarch64-static >/dev/null 2>&1 || warn "qemu-aarch64-static not 
 : "${KS_RPI_KEY_FILE:=keys/raspberrypi-archive-stable.gpg}"
 : "${KS_RPI_KEY_DST:=/usr/share/keyrings/raspberrypi-archive-stable.gpg}"
 : "${KS_RPI_APT_FILE:=/etc/apt/sources.list.d/raspi.list}"
+
+# Debian archive key (copy in, so the image has it preseeded too)
+: "${KS_ENABLE_DEBIAN_KEY:=1}"
+: "${KS_DEBIAN_KEY_FILE:=keys/debian-archive-keyring.gpg}"
+: "${KS_DEBIAN_KEY_DST:=/usr/share/keyrings/debian-archive-keyring.gpg}"
 
 # ------------------------- paths & logging ------------------------------------
 OUT_DIR="${ROOT}/${KS_OUT_DIR}"
@@ -92,13 +99,21 @@ info "Device : ${KS_DEVICE}"
 info "Profile: ${KS_PROFILE}"
 info "Color  : ${KS_COLOR}"
 
-# ------------------------- verify repo key if enabled -------------------------
+# ------------------------- verify key files if enabled ------------------------
 if [[ "${KS_ENABLE_RPI_REPO}" == "1" ]]; then
   if [[ ! -f "${ROOT}/${KS_RPI_KEY_FILE}" ]]; then
-    error "Missing repo key file: ${KS_RPI_KEY_FILE} (expected in repo)"
+    error "Missing RPi repo key file: ${KS_RPI_KEY_FILE} (expected in repo)"
     exit 1
   fi
   info "RPi APT repo enabled; key: ${KS_RPI_KEY_FILE}"
+fi
+
+if [[ "${KS_ENABLE_DEBIAN_KEY}" == "1" ]]; then
+  if [[ ! -f "${ROOT}/${KS_DEBIAN_KEY_FILE}" ]]; then
+    error "Missing Debian archive key file: ${KS_DEBIAN_KEY_FILE} (expected in repo)"
+    exit 1
+  fi
+  info "Debian archive key seeding enabled; key: ${KS_DEBIAN_KEY_FILE}"
 fi
 
 # ------------------------- collect device/profile layers ----------------------
@@ -228,7 +243,12 @@ cmd=(bdebstrap
   --output "${OUT_DIR}"
   --force --verbose)
 
-# Preseed Raspberry Pi repo key & source before apt runs (setup-hooks)
+# Preseed Debian archive key inside target (so the image has it)
+if [[ "${KS_ENABLE_DEBIAN_KEY}" == "1" ]]; then
+  cmd+=(--setup-hook="copy-in ${ROOT}/${KS_DEBIAN_KEY_FILE} ${KS_DEBIAN_KEY_DST}")
+fi
+
+# Preseed Raspberry Pi repo key & source before apt runs
 if [[ "${KS_ENABLE_RPI_REPO}" == "1" ]]; then
   cmd+=(--setup-hook="copy-in ${ROOT}/${KS_RPI_KEY_FILE} ${KS_RPI_KEY_DST}")
   cmd+=(--setup-hook="sh -c 'mkdir -p \"\$1/etc/apt/sources.list.d\" && printf \"%s\n\" \"deb [arch=${KS_RPI_REPO_ARCH} signed-by=${KS_RPI_KEY_DST}] ${KS_RPI_REPO_URL} ${KS_SUITE} ${KS_RPI_REPO_COMPONENTS}\" > \"\$1${KS_RPI_APT_FILE}\"'")
@@ -279,4 +299,3 @@ info "Device : ${KS_DEVICE}"
 info "Profile: ${KS_PROFILE}"
 info "Image  : ${IMG_DIR}/${KS_IMG_NAME}"
 info "Log    : ${LOGFILE}"
-```0
