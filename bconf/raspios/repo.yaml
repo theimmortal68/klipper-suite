@@ -5,6 +5,7 @@ mmdebstrap:
   # Put the key in place very early so the RPi repo can be verified.
   setup-hooks:
     - mkdir -p $1/usr/share/keyrings
+    - ls -l ${KS_TOP}/keys/raspberrypi-archive-keyring.gpg
     # Use the actual filename you have in your repo. If your file is
     # keys/raspberrypi-archive-keyring.gpg, use that in the source path.
     - copy-in ${KS_TOP}/keys/raspberrypi-archive-keyring.gpg /usr/share/keyrings
