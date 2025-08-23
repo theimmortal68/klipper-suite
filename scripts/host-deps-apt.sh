@@ -15,7 +15,6 @@ sudo apt-get install -y \
   zstd \
   tar \
   util-linux \
-  realpath:coreutils \
   grep \
   mtools \
   zstd \
