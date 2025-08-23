@@ -1,5 +1,5 @@
 ---
-name: bookworm-arm64-slim
+name: bookworm
 mmdebstrap:
   architectures:
     - arm64
@@ -7,9 +7,9 @@ mmdebstrap:
   variant: custom
   suite: bookworm
   mirrors:
-    - deb http://deb.debian.org/debian bookworm main contrib non-free non-free-firmware
-    - deb http://deb.debian.org/debian-security bookworm-security main contrib non-free non-free-firmware
-    - deb http://deb.debian.org/debian bookworm-updates main contrib non-free non-free-firmware
+    - deb [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] http://deb.debian.org/debian bookworm main contrib non-free non-free-firmware
+    - deb [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] http://deb.debian.org/debian-security bookworm-security main contrib non-free non-free-firmware
+    - deb [signed-by=/usr/share/keyrings/debian-archive-keyring.gpg] http://deb.debian.org/debian bookworm-updates main contrib non-free non-free-firmware
   packages:
     - perl
     - findutils
