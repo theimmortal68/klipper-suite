@@ -8,6 +8,20 @@ def() { eval ": \${$1:=$2}"; export "$1"; }
 def KS_DEVICE   "rpi5"      # devices/<device>/layers.yaml (optional)
 def KS_PROFILE  "base"       # base | klipper | mainsailos | ratos
 
+# ---- Raspberry Pi repo (key + source) ---------------------------------------
+# Enable to add http://archive.raspberrypi.org/debian with signed-by keyring
+def KS_ENABLE_RPI_REPO        "1"
+def KS_RPI_REPO_URL           "http://archive.raspberrypi.org/debian"
+def KS_RPI_REPO_COMPONENTS    "main"
+def KS_RPI_REPO_ARCH          "arm64"
+
+# Path to the key file in THIS repo and where to install it inside the target
+def KS_RPI_KEY_FILE           "keys/raspberrypi-archive-stable.gpg"
+def KS_RPI_KEY_DST            "/usr/share/keyrings/raspberrypi-archive-stable.gpg"
+
+# Where to write the apt source entry inside the target
+def KS_RPI_APT_FILE           "/etc/apt/sources.list.d/raspi.list"
+
 # ---- Build target (ARM64) ---------------------------------------------------
 def KS_ARCH        "arm64"
 def KS_SUITE       "bookworm"
