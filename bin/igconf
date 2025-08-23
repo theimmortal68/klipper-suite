@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # This script can be sourced so the macros below can be utilised (although
 # scope is intentionally limited to the current process) or it can be run.
