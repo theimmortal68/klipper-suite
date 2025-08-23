@@ -232,7 +232,7 @@ cmd=(bdebstrap
   --config "${BDEB_CFG_BASE}"
   --name   "${KS_DEVICE}-${KS_PROFILE}-${KS_SUITE}-${KS_ARCH}"
   --output "${OUT_DIR}"
-  --force --verbose)
+  --force --verbose --debug)
 
 # Preseed Debian archive key inside target
 if [[ "${KS_ENABLE_DEBIAN_KEY}" == "1" ]]; then
