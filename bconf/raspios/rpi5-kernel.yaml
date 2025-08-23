@@ -1,5 +1,5 @@
 ---
-name: rpi-linux-2712
+name: rpi5-kernel
 env:
   INITRD: "No"
 mmdebstrap:
