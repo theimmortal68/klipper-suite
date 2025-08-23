@@ -28,16 +28,6 @@ jobs:
           set -euo pipefail
           bash scripts/host-deps-apt.sh
 
-      # Provide Debian archive signing keys for mmdebstrap
-      - name: Provide Debian archive signing keys for mmdebstrap
-        run: |
-          set -eux
-          sudo apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=600 update
-          sudo apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=600 install -y debian-archive-keyring
-          mkdir -p keys
-          cp /usr/share/keyrings/debian-archive-keyring.gpg keys/
-          ls -l keys
-
       # (Optional) Print the resolved config for debugging
       - name: Print config
         run: |
