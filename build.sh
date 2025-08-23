@@ -190,7 +190,8 @@ if [ -z "$IMAGE_ONLY" ]; then
         --setup-hook 'bin/runner setup "$@"' \
         --essential-hook 'bin/runner essential "$@"' \
         --customize-hook 'bin/runner customize "$@"' \
-        --cleanup-hook 'bin/runner cleanup "$@"'
+        --cleanup-hook 'bin/runner cleanup "$@"' \
+        --verbose --debug
 
     if [ -f "$IGconf_sys_target" ]; then
         exit 0
