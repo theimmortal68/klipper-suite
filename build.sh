@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Build a Bookworm ARM64 Raspberry Pi–style image using bdebstrap + genimage,
-# with selectable DEVICE and PROFILE and colorized console output.
+# with selectable DEVICE and PROFILE, colorized output, and preseeded RPi repo key.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 . "${ROOT}/options.sh"
 
-# ---- parse args: [device] [profile] / --device / --profile -------------------
+# ------------------------- arg parsing ----------------------------------------
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -d|--device)   KS_DEVICE="${2:?}"; shift 2 ;;
@@ -24,25 +24,25 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# ---- color helpers -----------------------------------------------------------
+# ------------------------- color helpers --------------------------------------
+: "${KS_COLOR:=auto}"
 _color_on=false
 if [[ "${KS_COLOR}" == "always" ]] || { [[ "${KS_COLOR}" == "auto" ]] && { [[ -t 1 ]] || [[ -n "${GITHUB_ACTIONS:-}" ]]; }; }; then
   _color_on=true
 fi
 if $_color_on; then
-  RED=$'\e[31m'; GRN=$'\e[32m'; YEL=$'\e[33m'; BLU=$'\e[34m'; MAG=$'\e[35m'; CYN=$'\e[36m'; BLD=$'\e[1m'; RST=$'\e[0m'
+  RED=$'\e[31m'; GRN=$'\e[32m'; YEL=$'\e[33m'; BLU=$'\e[34m'; CYN=$'\e[36m'; BLD=$'\e[1m'; RST=$'\e[0m'
+  export PS4=$'\e[36m+ \e[0m'
 else
-  RED=""; GRN=""; YEL=""; BLU=""; MAG=""; CYN=""; BLD=""; RST=""
+  RED=""; GRN=""; YEL=""; BLU=""; CYN=""; BLD=""; RST=""
+  export PS4='+ '
 fi
 info()    { printf '%s[INFO]%s %s\n'  "$GRN" "$RST" "$*"; }
 warn()    { printf '%s[WARN]%s %s\n'  "$YEL" "$RST" "$*"; }
 error()   { printf '%s[ERR ]%s %s\n'  "$RED" "$RST" "$*"; }
 section() { printf '\n%s==> %s%s\n'    "$BLU" "$1" "$RST"; }
 
-# Colorize set -x trace prompt
-if $_color_on; then export PS4=$'\e[36m+ \e[0m'; else export PS4='+ '; fi
-
-# ---- tool checks -------------------------------------------------------------
+# ------------------------- tool checks ----------------------------------------
 need() { command -v "$1" >/dev/null 2>&1 || { error "Missing: $1"; exit 1; }; }
 need bdebstrap
 need genimage
@@ -56,7 +56,16 @@ if [[ -f "${ROOT}/devices/${KS_DEVICE}/layers.yaml" ]]; then
 fi
 command -v qemu-aarch64-static >/dev/null 2>&1 || warn "qemu-aarch64-static not found; required to cross-build arm64 on x86_64."
 
-# ---- paths -------------------------------------------------------------------
+# ------------------------- defaults for RPi repo knobs ------------------------
+: "${KS_ENABLE_RPI_REPO:=1}"
+: "${KS_RPI_REPO_URL:=http://archive.raspberrypi.org/debian}"
+: "${KS_RPI_REPO_COMPONENTS:=main}"
+: "${KS_RPI_REPO_ARCH:=arm64}"
+: "${KS_RPI_KEY_FILE:=keys/raspberrypi-archive-stable.gpg}"
+: "${KS_RPI_KEY_DST:=/usr/share/keyrings/raspberrypi-archive-stable.gpg}"
+: "${KS_RPI_APT_FILE:=/etc/apt/sources.list.d/raspi.list}"
+
+# ------------------------- paths & logging ------------------------------------
 OUT_DIR="${ROOT}/${KS_OUT_DIR}"
 ROOTFS="${OUT_DIR}/rootfs"
 LOGFILE="${OUT_DIR}/BUILD_LOG.txt"
@@ -71,10 +80,9 @@ DEV_LAYERS="${DEV_DIR}/layers.yaml"
 sudo rm -rf "${ROOTFS}" "${IMG_DIR}" "${TMP_DIR}" "${BOOT_IMG}" "${BDEB_CFG_BASE}" "${CFG_AUTO}"
 mkdir -p "${OUT_DIR}" "${IMG_DIR}" "${TMP_DIR}"
 
-# Mirror console output to file, stripping ANSI so the log is clean.
-# If color is disabled, we just tee as-is.
+# mirror console to file; strip ANSI for the saved log if colors are on
 if $_color_on; then
-  exec > >(tee >(sed -r 's/\x1b\[[0-9;]*m//g' > "${LOGFILE}")) 2>&1
+  exec > >(tee >(sed -E 's/\x1b\[[0-9;]*m//g' > "${LOGFILE}")) 2>&1
 else
   exec > >(tee "${LOGFILE}") 2>&1
 fi
@@ -84,7 +92,16 @@ info "Device : ${KS_DEVICE}"
 info "Profile: ${KS_PROFILE}"
 info "Color  : ${KS_COLOR}"
 
-# ---- gather layer configs from device/profile (optional) ---------------------
+# ------------------------- verify repo key if enabled -------------------------
+if [[ "${KS_ENABLE_RPI_REPO}" == "1" ]]; then
+  if [[ ! -f "${ROOT}/${KS_RPI_KEY_FILE}" ]]; then
+    error "Missing repo key file: ${KS_RPI_KEY_FILE} (expected in repo)"
+    exit 1
+  fi
+  info "RPi APT repo enabled; key: ${KS_RPI_KEY_FILE}"
+fi
+
+# ------------------------- collect device/profile layers ----------------------
 LAYER_CFGS=()
 if [[ -f "${DEV_LAYERS}" ]]; then
   if ! yq -e '.profiles' "${DEV_LAYERS}" >/dev/null; then
@@ -102,7 +119,7 @@ else
   warn "No device layer file at ${DEV_LAYERS}; continuing with base config only."
 fi
 
-# ---- create single in-chroot apply script -----------------------------------
+# ------------------------- in-chroot apply script -----------------------------
 APPLY="$(mktemp)"
 cat > "${APPLY}" <<'EOSH'
 #!/usr/bin/env bash
@@ -110,10 +127,14 @@ set -euxo pipefail
 export DEBIAN_FRONTEND=noninteractive
 . /etc/ks/options.sh
 
+# Ensure RPi boot dir exists (Bookworm layout)
 mkdir -p /boot/firmware
+
+# Hostname + hosts
 echo "${KS_HOSTNAME}" > /etc/hostname
 printf "127.0.0.1\tlocalhost\n127.0.1.1\t%s\n" "${KS_HOSTNAME}" > /etc/hosts
 
+# Timezone + locale
 ln -sf "/usr/share/zoneinfo/${KS_TIMEZONE}" /etc/localtime
 echo "${KS_TIMEZONE}" > /etc/timezone
 sed -i "s/^# *${KS_LOCALE}/${KS_LOCALE}/" /etc/locale.gen || true
@@ -121,6 +142,7 @@ grep -qE "^${KS_LOCALE}" /etc/locale.gen || echo "${KS_LOCALE} UTF-8" >> /etc/lo
 locale-gen
 update-locale LANG="${KS_LOCALE}"
 
+# Minimal RPi boot configs if none provided by packages/layers
 if [ ! -s /boot/firmware/config.txt ]; then
   cat > /boot/firmware/config.txt <<CONF
 [all]
@@ -132,6 +154,7 @@ if [ ! -s /boot/firmware/cmdline.txt ]; then
   echo "console=serial0,115200 console=tty1 root=LABEL=${KS_ROOTFS_LABEL} rootfstype=ext4 fsck.repair=yes rootwait quiet" > /boot/firmware/cmdline.txt
 fi
 
+# Default user (plaintext -> chpasswd)
 if [ "${KS_CREATE_USER}" = "1" ]; then
   if id -u "${KS_DEVICE_USER}" >/dev/null 2>&1; then
     echo "user exists, aborting by design"; exit 1
@@ -151,21 +174,22 @@ if [ "${KS_CREATE_USER}" = "1" ]; then
   fi
 fi
 
+# Marker
 echo "Built by bdebstrap at $(date -u +%FT%TZ)" > /etc/issue.d/ci-build.issue
 touch /root/BUILD_OK
 EOSH
 chmod +x "${APPLY}"
 
-# ---- render base bdebstrap YAML (always applied) -----------------------------
+# ------------------------- base bdebstrap YAML --------------------------------
 pkg_yaml_items=""
 IFS=',' read -ra _pkgs <<< "${KS_PACKAGES}"
-for p in "${_pkgs[@]}"; do pkg_yaml_items+="\n      - ${p}"; done
+for p in "${_pkgs[@]}"; do [[ -n "$p" ]] && pkg_yaml_items+="\n      - ${p}"; done
 
 comp_yaml_items=""
 IFS=',' read -ra _comps <<< "${KS_COMPONENTS}"
-for c in "${_comps[@]}"; do comp_yaml_items+="\n      - ${c}"; done
+for c in "${_comps[@]}"; do [[ -n "$c" ]] && comp_yaml_items+="\n    - ${c}"; done
+[[ -z "${comp_yaml_items}" ]] && comp_yaml_items=$'\n    - main'
 
-BDEB_CFG_BASE="${OUT_DIR}/bdebstrap.base.yaml"
 cat > "${BDEB_CFG_BASE}" <<EOF
 ---
 name: ${KS_DEVICE}-${KS_PROFILE}-${KS_SUITE}-${KS_ARCH}
@@ -180,8 +204,7 @@ mmdebstrap:
   suite: ${KS_SUITE}
   architectures:
     - ${KS_ARCH}
-  components:${comp_yaml_items:-"
-    - main"}
+  components:${comp_yaml_items}
   mirrors:
     - ${KS_MIRROR}
   variant: ${KS_VARIANT}
@@ -202,20 +225,33 @@ mmdebstrap:
     - chroot "\$1" bash -eux /apply.sh
 EOF
 
-# ---- run bdebstrap (merge base + any profile/device layers) -----------------
+# ------------------------- run bdebstrap (merge layers) ----------------------
 section "bdebstrap"
-cmd=(bdebstrap --config "${BDEB_CFG_BASE}" --name "${KS_DEVICE}-${KS_PROFILE}-${KS_SUITE}-${KS_ARCH}" --output "${OUT_DIR}" --force --verbose)
+cmd=(bdebstrap
+  --config "${BDEB_CFG_BASE}"
+  --name   "${KS_DEVICE}-${KS_PROFILE}-${KS_SUITE}-${KS_ARCH}"
+  --output "${OUT_DIR}"
+  --force --verbose)
+
+# Preseed Raspberry Pi repo key & source before apt runs (setup-hooks)
+if [[ "${KS_ENABLE_RPI_REPO}" == "1" ]]; then
+  cmd+=(--setup-hook="copy-in ${ROOT}/${KS_RPI_KEY_FILE} ${KS_RPI_KEY_DST}")
+  # shell quoting: write the source file inside target at setup time
+  cmd+=(--setup-hook="sh -c 'mkdir -p \"\$1/etc/apt/sources.list.d\" && printf \"%s\n\" \"deb [arch=${KS_RPI_REPO_ARCH} signed-by=${KS_RPI_KEY_DST}] ${KS_RPI_REPO_URL} ${KS_SUITE} ${KS_RPI_REPO_COMPONENTS}\" > \"\$1${KS_RPI_APT_FILE}\"'")
+fi
+
+# Add any device/profile layer configs (-c merges in order)
 for f in "${LAYER_CFGS[@]}"; do
   [[ -f "${ROOT}/${f}" ]] || { error "Missing layer config: ${f}"; exit 1; }
   cmd+=(-c "${ROOT}/${f}")
 done
+
 set -x
 "${cmd[@]}"
 set +x
 
-# ---- build boot.vfat from /boot/firmware ------------------------------------
+# ------------------------- assemble boot (FAT32) -----------------------------
 section "Assemble boot (FAT32)"
-BOOT_IMG="${OUT_DIR}/boot.vfat"
 dd if=/dev/zero of="${BOOT_IMG}" bs=1M count="${KS_BOOT_SIZE_MIB}" status=none
 mkfs.vfat -n "${KS_BOOT_LABEL}" "${BOOT_IMG}"
 TMP_BOOT="$(mktemp -d)"
@@ -223,13 +259,12 @@ sudo mount -o loop "${BOOT_IMG}" "${TMP_BOOT}"
 sudo rsync -aH --delete "${ROOTFS}/boot/firmware/" "${TMP_BOOT}/"
 sync; sudo umount "${TMP_BOOT}"; rmdir "${TMP_BOOT}"
 
-# ---- compute rootfs size for genimage ---------------------------------------
+# ------------------------- compute rootfs size --------------------------------
 ROOT_SIZE_MIB=$(( KS_IMG_SIZE_MIB - KS_BOOT_SIZE_MIB - 8 ))
 (( ROOT_SIZE_MIB > 0 )) || { error "Increase KS_IMG_SIZE_MIB"; exit 1; }
 
-# ---- genimage config (auto) --------------------------------------------------
+# ------------------------- genimage config (auto) -----------------------------
 section "genimage"
-CFG_AUTO="${OUT_DIR}/genimage.auto.cfg"
 cat > "${CFG_AUTO}" <<CFGEOF
 image "${KS_IMG_NAME}" {
   hdimage { partition-table-type = "${KS_PART_TABLE}" }
@@ -250,3 +285,4 @@ info "Device : ${KS_DEVICE}"
 info "Profile: ${KS_PROFILE}"
 info "Image  : ${IMG_DIR}/${KS_IMG_NAME}"
 info "Log    : ${LOGFILE}"
+```0
