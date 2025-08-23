@@ -8,7 +8,7 @@ source "${IGTOP}/scripts/dependencies_check"
 dependencies_check "${IGTOP}/depends" || exit 1
 source "${IGTOP}/scripts/common"
 source "${IGTOP}/scripts/core"
-source "${IGTOP}/bin/igconf"
+source "${IGTOP}/bin/ksconf"
 
 
 # Defaults
@@ -126,8 +126,8 @@ CFG=$(realpath -e "${IGTOP_CONFIG}/${INCONFIG}" 2>/dev/null) || \
 
 
 # Set via cmdline only
-[[ -d $EXT_DIR ]] && IGconf_ext_dir="$EXT_DIR"
-[[ -d $EXT_NSDIR ]] && IGconf_ext_nsdir="$EXT_NSDIR"
+[[ -d $EXT_DIR ]] && KSconf_ext_dir="$EXT_DIR"
+[[ -d $EXT_NSDIR ]] && KSconf_ext_nsdir="$EXT_NSDIR"
 
 
 msg "Reading $CFG with options [$INOPTIONS]"
@@ -141,20 +141,20 @@ aggregate_config "$CFG"
 
 
 # Mandatory for subsequent parsing
-[[ -z ${IGconf_image_layout+x} ]] && die "No image layout provided"
-[[ -z ${IGconf_device_class+x} ]] && die "No device class provided"
-[[ -z ${IGconf_device_profile+x} ]] && die "No device profile provided"
+[[ -z ${KSconf_image_layout+x} ]] && die "No image layout provided"
+[[ -z ${KSconf_device_class+x} ]] && die "No device class provided"
+[[ -z ${KSconf_device_profile+x} ]] && die "No device profile provided"
 
 
 # Internalise hierarchy paths, prioritising the external sub-directory tree
-[[ -d $EXT_DIR ]] && IGDEVICE=$(realpath -e "${EXT_DIR}/device/$IGconf_device_class" 2>/dev/null)
-: ${IGDEVICE:=${IGTOP_DEVICE}/$IGconf_device_class}
+[[ -d $EXT_DIR ]] && IGDEVICE=$(realpath -e "${EXT_DIR}/device/$KSconf_device_class" 2>/dev/null)
+: ${IGDEVICE:=${IGTOP_DEVICE}/$KSconf_device_class}
 
-[[ -d $EXT_DIR ]] && IGIMAGE=$(realpath -e "${EXT_DIR}/image/$IGconf_image_layout" 2>/dev/null)
-: ${IGIMAGE:=${IGTOP_IMAGE}/$IGconf_image_layout}
+[[ -d $EXT_DIR ]] && IGIMAGE=$(realpath -e "${EXT_DIR}/image/$KSconf_image_layout" 2>/dev/null)
+: ${IGIMAGE:=${IGTOP_IMAGE}/$KSconf_image_layout}
 
-[[ -d $EXT_DIR ]] && IGPROFILE=$(realpath -e "${EXT_DIR}/profile/$IGconf_device_profile" 2>/dev/null)
-: ${IGPROFILE:=${IGTOP_PROFILE}/$IGconf_device_profile}
+[[ -d $EXT_DIR ]] && IGPROFILE=$(realpath -e "${EXT_DIR}/profile/$KSconf_device_profile" 2>/dev/null)
+: ${IGPROFILE:=${IGTOP_PROFILE}/$KSconf_device_profile}
 
 
 # Final path validation
@@ -188,45 +188,45 @@ aggregate_options "meta" ${META}/defaults
 
 
 # Assemble APT keys
-if igconf_isnset sys_apt_keydir ; then
-   IGconf_sys_apt_keydir="${IGconf_sys_workdir}/keys"
-   mkdir -p "$IGconf_sys_apt_keydir"
-   [[ -d /usr/share/keyrings ]] && rsync -a /usr/share/keyrings/ $IGconf_sys_apt_keydir
-   [[ -d "$USER/.local/share/keyrings" ]] && rsync -a "$USER/.local/share/keyrings/" $IGconf_sys_apt_keydir
-   rsync -a "$IGTOP/keydir/" $IGconf_sys_apt_keydir
+if ksconf_isnset sys_apt_keydir ; then
+   KSconf_sys_apt_keydir="${KSconf_sys_workdir}/keys"
+   mkdir -p "$KSconf_sys_apt_keydir"
+   [[ -d /usr/share/keyrings ]] && rsync -a /usr/share/keyrings/ $KSconf_sys_apt_keydir
+   [[ -d "$USER/.local/share/keyrings" ]] && rsync -a "$USER/.local/share/keyrings/" $KSconf_sys_apt_keydir
+   rsync -a "$IGTOP/keydir/" $KSconf_sys_apt_keydir
 fi
-[[ -d $IGconf_sys_apt_keydir ]] || die "apt keydir $IGconf_sys_apt_keydir is invalid"
+[[ -d $KSconf_sys_apt_keydir ]] || die "apt keydir $KSconf_sys_apt_keydir is invalid"
 
 
 # Assemble environment for rootfs and image creation, propagating IG variables
 # to rootfs and post-build stages as appropriate.
 ENV_ROOTFS=()
 ENV_POST_BUILD=()
-for v in $(compgen -A variable -X '!IGconf*') ; do
+for v in $(compgen -A variable -X '!KSconf*') ; do
    case $v in
-      IGconf_device_timezone)
+      KSconf_device_timezone)
          ENV_ROOTFS+=('--env' ${v}="${!v}")
          ENV_POST_BUILD+=(${v}="${!v}")
-         ENV_ROOTFS+=('--env' IGconf_device_timezone_area="${!v%%/*}")
-         ENV_ROOTFS+=('--env' IGconf_device_timezone_city="${!v##*/}")
-         ENV_POST_BUILD+=(IGconf_device_timezone_area="${!v%%/*}")
-         ENV_POST_BUILD+=(IGconf_device_timezone_city="${!v##*/}")
+         ENV_ROOTFS+=('--env' KSconf_device_timezone_area="${!v%%/*}")
+         ENV_ROOTFS+=('--env' KSconf_device_timezone_city="${!v##*/}")
+         ENV_POST_BUILD+=(KSconf_device_timezone_area="${!v%%/*}")
+         ENV_POST_BUILD+=(KSconf_device_timezone_city="${!v##*/}")
          ;;
-      IGconf_sys_apt_proxy_http)
+      KSconf_sys_apt_proxy_http)
          err=$(curl --head --silent --write-out "%{http_code}" --output /dev/null "${!v}")
          [[ $? -ne 0 ]] && die "unreachable proxy: ${!v}"
          msg "$err ${!v}"
          ENV_ROOTFS+=('--aptopt' "Acquire::http { Proxy \"${!v}\"; }")
          ENV_ROOTFS+=('--env' ${v}="${!v}")
          ;;
-      IGconf_sys_apt_keydir)
+      KSconf_sys_apt_keydir)
          ENV_ROOTFS+=('--aptopt' "Dir::Etc::TrustedParts ${!v}")
          ENV_ROOTFS+=('--env' ${v}="${!v}")
          ;;
-      IGconf_sys_apt_get_purge)
-         if igconf_isy $v ; then ENV_ROOTFS+=('--aptopt' "APT::Get::Purge true") ; fi
+      KSconf_sys_apt_get_purge)
+         if ksconf_isy $v ; then ENV_ROOTFS+=('--aptopt' "APT::Get::Purge true") ; fi
          ;;
-      IGconf_ext_dir|IGconf_ext_nsdir )
+      KSconf_ext_dir|KSconf_ext_nsdir )
          ENV_ROOTFS+=('--env' ${v}="${!v}")
          ENV_POST_BUILD+=(${v}="${!v}")
          if [ -d "${!v}/bin" ] ; then
@@ -254,8 +254,8 @@ done
 
 # Final PATH setup
 ENV_ROOTFS+=('--env' PATH="${IGTOP}/bin:$PATH")
-mkdir -p ${IGconf_sys_workdir}/host/bin
-ENV_POST_BUILD+=(PATH="${IGTOP}/bin:${IGconf_sys_workdir}/host/bin:${PATH}")
+mkdir -p ${KSconf_sys_workdir}/host/bin
+ENV_POST_BUILD+=(PATH="${IGTOP}/bin:${KSconf_sys_workdir}/host/bin:${PATH}")
 
 
 # Load layer default settings and append layer to list
@@ -315,13 +315,13 @@ load_profile main "$IGPROFILE"
 
 
 # Add layers from image profile
-if igconf_isset image_profile ; then
-   load_profile image "${IGIMAGE}/profile/${IGconf_image_profile}"
+if ksconf_isset image_profile ; then
+   load_profile image "${IGIMAGE}/profile/${KSconf_image_profile}"
 fi
 
 
 # Auto-selected layers
-if igconf_isy device_ssh_user1 ; then
+if ksconf_isy device_ssh_user1 ; then
    layer_push auto net-misc/openssh-server
 fi
 
@@ -361,34 +361,34 @@ fi
    "${ARGS_LAYERS[@]}" \
    "${ENV_ROOTFS[@]}" \
    --force \
-   --name "$IGconf_image_name" \
-   --hostname "$IGconf_device_hostname" \
-   --output "$IGconf_sys_outputdir" \
-   --target "$IGconf_sys_target"  \
+   --name "$KSconf_image_name" \
+   --hostname "$KSconf_device_hostname" \
+   --output "$KSconf_sys_outputdir" \
+   --target "$KSconf_sys_target"  \
    --setup-hook 'bin/runner setup "$@"' \
    --essential-hook 'bin/runner essential "$@"' \
    --customize-hook 'bin/runner customize "$@"' \
    --cleanup-hook 'bin/runner cleanup "$@"'
 
 
-[[ -f "$IGconf_sys_target" ]] && { msg "Exiting as non-directory target complete" ; exit 0 ; }
+[[ -f "$KSconf_sys_target" ]] && { msg "Exiting as non-directory target complete" ; exit 0 ; }
 
 
 # post-build: apply rootfs overlays - image layout then device
 if [ -d ${IGIMAGE}/device/rootfs-overlay ] ; then
-   run podman unshare rsync -a ${IGIMAGE}/device/rootfs-overlay/ ${IGconf_sys_target}
+   run podman unshare rsync -a ${IGIMAGE}/device/rootfs-overlay/ ${KSconf_sys_target}
 fi
 if [ -d ${IGDEVICE}/device/rootfs-overlay ] ; then
-   run podman unshare rsync -a ${IGDEVICE}/device/rootfs-overlay/ ${IGconf_sys_target}
+   run podman unshare rsync -a ${IGDEVICE}/device/rootfs-overlay/ ${KSconf_sys_target}
 fi
 
 
 # post-build: hooks - image layout then device
 if [ -x ${IGIMAGE}/post-build.sh ] ; then
-   runh ${IGIMAGE}/post-build.sh ${IGconf_sys_target}
+   runh ${IGIMAGE}/post-build.sh ${KSconf_sys_target}
 fi
 if [ -x ${IGDEVICE}/post-build.sh ] ; then
-   runh ${IGDEVICE}/post-build.sh ${IGconf_sys_target}
+   runh ${IGDEVICE}/post-build.sh ${KSconf_sys_target}
 fi
 
 
@@ -397,9 +397,9 @@ fi
 
 # pre-image: hooks - device has priority over image layout
 if [ -x ${IGDEVICE}/pre-image.sh ] ; then
-   runh ${IGDEVICE}/pre-image.sh ${IGconf_sys_target} ${IGconf_sys_outputdir}
+   runh ${IGDEVICE}/pre-image.sh ${KSconf_sys_target} ${KSconf_sys_outputdir}
 elif [ -x ${IGIMAGE}/pre-image.sh ] ; then
-   runh ${IGIMAGE}/pre-image.sh ${IGconf_sys_target} ${IGconf_sys_outputdir}
+   runh ${IGIMAGE}/pre-image.sh ${KSconf_sys_target} ${KSconf_sys_outputdir}
 else
    die "no pre-image hook"
 fi
@@ -407,17 +407,17 @@ fi
 
 GTMP=$(mktemp -d)
 trap 'rm -rf $GTMP' EXIT
-mkdir -p "$IGconf_sys_deploydir"
+mkdir -p "$KSconf_sys_deploydir"
 
 
 # Generate image(s)
-for f in "${IGconf_sys_outputdir}"/genimage*.cfg; do
+for f in "${KSconf_sys_outputdir}"/genimage*.cfg; do
    [[ -f "$f" ]] || continue
    run podman unshare env "${ENV_POST_BUILD[@]}" genimage \
-      --rootpath ${IGconf_sys_target} \
+      --rootpath ${KSconf_sys_target} \
       --tmppath $GTMP \
-      --inputpath ${IGconf_sys_outputdir}   \
-      --outputpath ${IGconf_sys_outputdir} \
+      --inputpath ${KSconf_sys_outputdir}   \
+      --outputpath ${KSconf_sys_outputdir} \
       --loglevel=1 \
       --config $f | pv -t -F 'Generating image...%t' || die "genimage error"
 done
@@ -425,9 +425,9 @@ done
 
 # post-image: hooks - device has priority over image layout
 if [ -x ${IGDEVICE}/post-image.sh ] ; then
-   runh ${IGDEVICE}/post-image.sh $IGconf_sys_deploydir
+   runh ${IGDEVICE}/post-image.sh $KSconf_sys_deploydir
 elif [ -x ${IGIMAGE}/post-image.sh ] ; then
-   runh ${IGIMAGE}/post-image.sh $IGconf_sys_deploydir
+   runh ${IGIMAGE}/post-image.sh $KSconf_sys_deploydir
 else
-   runh ${IGTOP_IMAGE}/post-image.sh $IGconf_sys_deploydir
+   runh ${IGTOP_IMAGE}/post-image.sh $KSconf_sys_deploydir
 fi

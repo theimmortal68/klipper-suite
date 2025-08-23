@@ -18,8 +18,8 @@ done
 
 # Hint if the image layout has declared a rootfs type. This helps ensure
 # the appropriate fsck binaries are installed.
-if igconf isset image_rootfs_type ; then
-   sed -i "s|FSTYPE=\([^ ]*\)|FSTYPE=${IGconf_image_rootfs_type}|" $1/etc/initramfs-tools/initramfs.conf
+if ksconf isset image_rootfs_type ; then
+   sed -i "s|FSTYPE=\([^ ]*\)|FSTYPE=${KSconf_image_rootfs_type}|" $1/etc/initramfs-tools/initramfs.conf
 fi
 
 # Create all images if kernel postinst was instructed to not generate, else

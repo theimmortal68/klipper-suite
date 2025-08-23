@@ -76,7 +76,7 @@ if [ "${#FARGS[@]}" -eq 0 ]; then
 }
 
 
-ASSET_DIR=$(pmap -f $JSON --get-key IGmeta.IGconf_sys_outputdir)
+ASSET_DIR=$(pmap -f $JSON --get-key IGmeta.KSconf_sys_outputdir)
 [[ -d $ASSET_DIR ]] || die "JSON specified asset dir $ASSET_DIR is invalid"
 
 # Do it

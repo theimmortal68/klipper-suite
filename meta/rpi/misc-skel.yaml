@@ -11,5 +11,5 @@ mmdebstrap:
       ff02::2 ip6-allrouters
 
       127.0.0.1   localhost
-      127.0.1.1   $IGconf_device_hostname
+      127.0.1.1   $KSconf_device_hostname
       EOF

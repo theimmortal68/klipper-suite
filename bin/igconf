@@ -3,7 +3,7 @@
 # This script can be sourced so the macros below can be utilised (although
 # scope is intentionally limited to the current process) or it can be run.
 
-igconf_tr()
+ksconf_tr()
 {
    local prefix="$1"
    shift
@@ -17,17 +17,17 @@ igconf_tr()
       fi
    done
    for v in "${args[@]}" ; do
-      v="${v#IGconf_}"
-      vars+=("IGconf_${v,,}")
+      v="${v#KSconf_}"
+      vars+=("KSconf_${v,,}")
    done
    if (( ${#vars[@]} )); then
       printf '%s\n' "${vars[@]}"
    fi
 }
 
-igconf_isset()
+ksconf_isset()
 {
-   for v in $(igconf_tr "" "$@") ; do
+   for v in $(ksconf_tr "" "$@") ; do
       if [ -z ${!v+x} ]; then
          return 1 # unset
       fi
@@ -35,9 +35,9 @@ igconf_isset()
     return 0
 }
 
-igconf_isnset()
+ksconf_isnset()
 {
-   for v in $(igconf_tr "" "$@") ; do
+   for v in $(ksconf_tr "" "$@") ; do
       if [ -z ${!v+x} ]; then
          :
       else
@@ -47,10 +47,10 @@ igconf_isnset()
     return 0
 }
 
-igconf_isy()
+ksconf_isy()
 {
-   igconf_isset "$@" || return 1
-   for v in $(igconf_tr "" "$@") ; do
+   ksconf_isset "$@" || return 1
+   for v in $(ksconf_tr "" "$@") ; do
       case ${!v,,} in
          y|yes)
             ;;
@@ -62,10 +62,10 @@ igconf_isy()
    return 0
 }
 
-igconf_isn()
+ksconf_isn()
 {
-   igconf_isset "$@" || return 1
-   for v in $(igconf_tr "" "$@") ; do
+   ksconf_isset "$@" || return 1
+   for v in $(ksconf_tr "" "$@") ; do
       case ${!v,,} in
          n|no)
             ;;
@@ -77,10 +77,10 @@ igconf_isn()
    return 0
 }
 
-igconf_isval()
+ksconf_isval()
 {
-   igconf_isset "$@" || return 1
-   for v in $(igconf_tr "" "$@") ; do
+   ksconf_isset "$@" || return 1
+   for v in $(ksconf_tr "" "$@") ; do
       if [ -z "${!v}" ]; then
          return 1 # empty
       fi
@@ -99,11 +99,11 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]] ; then
 
    case "$op" in
       isy|isn|isset|isnset|isval)
-         igconf_"$op" "$@"
+         ksconf_"$op" "$@"
          exit $?
          ;;
       *)
-         >&2 echo "Error: invalid igconf op ($op) args: $@" ; exit 1
+         >&2 echo "Error: invalid ksconf op ($op) args: $@" ; exit 1
          ;;
    esac
    exit 1

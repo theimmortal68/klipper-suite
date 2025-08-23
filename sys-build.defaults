@@ -11,7 +11,7 @@ apt_get_purge=y
 # Root of the directory hierarchy containing rpi-image-gen build artefacts.
 # Note, depending on the system being built, this directory can amount to a
 # substantial amount of consumed disk space.
-workdir="${IGTOP}/work/${IGconf_image_name}"
+workdir="${IGTOP}/work/${KSconf_image_name}"
 
 # If a particular collection of keys are required for bdebstrap to download
 # packages from the mirror(s) provided, set the directory containing them here.
@@ -26,10 +26,10 @@ workdir="${IGTOP}/work/${IGconf_image_name}"
 apt_keydir=
 
 # Location of all build product artefacts.
-outputdir="${IGconf_sys_workdir}/artefacts"
+outputdir="${KSconf_sys_workdir}/artefacts"
 
 # Location where final images and assets will be installed to.
-deploydir="${IGconf_sys_workdir}/deploy"
+deploydir="${KSconf_sys_workdir}/deploy"
 
 # The type of target created by bdebstrap to hold the device filesystem.
 # This argument is passed straight to bdebstrap via --target and can be the
@@ -43,4 +43,4 @@ deploydir="${IGconf_sys_workdir}/deploy"
 # the target is a file or a directory.
 # Note that it's possible to specify a directory here and use a post-build hook
 # to create a file (eg tarball) as an additional artefact.
-target="${IGconf_sys_workdir}/rootfs"
+target="${KSconf_sys_workdir}/rootfs"

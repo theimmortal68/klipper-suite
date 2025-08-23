@@ -17,4 +17,4 @@ compression=none
 profile=
 
 # The base name for all generated images
-name="${IGconf_device_class}-${IGconf_device_variant}-${IGconf_image_version}"
+name="${KSconf_device_class}-${KSconf_device_variant}-${KSconf_image_version}"

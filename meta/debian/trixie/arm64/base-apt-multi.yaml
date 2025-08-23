@@ -14,17 +14,17 @@ mmdebstrap:
     - login
     - linux-sysctl-defaults
   essential-hooks:
-    - echo tzdata tzdata/Areas select "$IGconf_device_timezone_area"
+    - echo tzdata tzdata/Areas select "$KSconf_device_timezone_area"
         | chroot $1 debconf-set-selections
-    - echo tzdata tzdata/Zones/$IGconf_device_timezone_area select "$IGconf_device_timezone_city"
+    - echo tzdata tzdata/Zones/$KSconf_device_timezone_area select "$KSconf_device_timezone_city"
         | chroot $1 debconf-set-selections
-    - echo locales locales/locales_to_be_generated multiselect "$IGconf_device_locale1"
+    - echo locales locales/locales_to_be_generated multiselect "$KSconf_device_locale1"
         | chroot $1 debconf-set-selections
-    - echo locales locales/default_environment_locale select "$IGconf_device_locale1"
+    - echo locales locales/default_environment_locale select "$KSconf_device_locale1"
         | chroot $1 debconf-set-selections
-    - echo keyboard-configuration keyboard-configuration/variant select "$IGconf_device_keyboard_layout"
+    - echo keyboard-configuration keyboard-configuration/variant select "$KSconf_device_keyboard_layout"
         | chroot $1 debconf-set-selections
-    - echo keyboard-configuration keyboard-configuration/xkb-keymap select "$IGconf_device_keyboard_keymap"
+    - echo keyboard-configuration keyboard-configuration/xkb-keymap select "$KSconf_device_keyboard_keymap"
         | chroot $1 debconf-set-selections
   aptopts:
     - APT::Install-Suggests "false"

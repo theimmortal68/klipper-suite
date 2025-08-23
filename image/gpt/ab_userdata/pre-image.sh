@@ -24,12 +24,12 @@ EOF
 
 # Write genimage template
 cat genimage.cfg.in | sed \
-   -e "s|<IMAGE_DIR>|$IGconf_sys_outputdir|g" \
-   -e "s|<IMAGE_NAME>|$IGconf_image_name|g" \
-   -e "s|<IMAGE_SUFFIX>|$IGconf_image_suffix|g" \
-   -e "s|<FW_SIZE>|$IGconf_image_boot_part_size|g" \
-   -e "s|<SYSTEM_SIZE>|$IGconf_image_system_part_size|g" \
-   -e "s|<SECTOR_SIZE>|$IGconf_device_sector_size|g" \
+   -e "s|<IMAGE_DIR>|$KSconf_sys_outputdir|g" \
+   -e "s|<IMAGE_NAME>|$KSconf_image_name|g" \
+   -e "s|<IMAGE_SUFFIX>|$KSconf_image_suffix|g" \
+   -e "s|<FW_SIZE>|$KSconf_image_boot_part_size|g" \
+   -e "s|<SYSTEM_SIZE>|$KSconf_image_system_part_size|g" \
+   -e "s|<SECTOR_SIZE>|$KSconf_device_sector_size|g" \
    -e "s|<SLOTP>|'$(readlink -ef slot-post-process.sh)'|g" \
    -e "s|<MKE2FSCONF>|'$(readlink -ef mke2fs.conf)'|g" \
    -e "s|<BOOTA_LABEL>|$BOOTA_LABEL|g" \

@@ -29,8 +29,8 @@ assignv() {
 # BAR=yyy
 #
 # will yield:
-# IGconf_mysection_foo=zzz
-# IGconf_mysection_bar=yyy
+# KSconf_mysection_foo=zzz
+# KSconf_mysection_bar=yyy
 #
 merge_config_section() {
    local section=$1
@@ -40,7 +40,7 @@ merge_config_section() {
       while IFS="=" read -r key value ; do
          [[ "$key" =~ ^#.*$ ]] && continue
          [[ "$key" =~ ^$ ]] && continue
-         local var=IGconf_"${section}"_"${key,,}"
+         local var=KSconf_"${section}"_"${key,,}"
          assignv "$var" "$value"
       done < <(printf '%s\n' "$attrs")
    fi
@@ -79,15 +79,15 @@ aggregate_config() {
 # BAR=yyy
 #
 # will yield:
-# IGconf_foo=zzz
-# IGconf_bar=yyy
+# KSconf_foo=zzz
+# KSconf_bar=yyy
 #
 apply_options() {
    if [[ $# -eq 2 && -f $2 ]] ; then
-      local prefix=IGconf_"${1,,}"
+      local prefix=KSconf_"${1,,}"
       local attrs=$(cat "$2")
    else
-      local prefix=IGconf
+      local prefix=KSconf
       local attrs=$(cat "$1")
    fi
    while IFS="=" read -r key value ; do
@@ -103,7 +103,7 @@ apply_options() {
 
 
 # shell variable list parser with prefix that reads key value pairs into the env
-# as above, but only if the fully qualified IGconf key is not set or set to the
+# as above, but only if the fully qualified KSconf key is not set or set to the
 # empty string.
 aggregate_options() {
    if [[ $# -eq 2 && -f $2 ]] ; then
@@ -115,7 +115,7 @@ aggregate_options() {
    while IFS="=" read -r key value ; do
       [[ "$key" =~ ^#.*$ ]] && continue
       [[ "$key" =~ ^$ ]] && continue
-      local var="IGconf_${section}_${key,,}"
+      local var="KSconf_${section}_${key,,}"
       assignv "$var" "$value"
    done < <(printf '%s\n' "$attrs")
 }

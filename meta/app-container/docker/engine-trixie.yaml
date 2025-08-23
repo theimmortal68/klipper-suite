@@ -9,7 +9,7 @@ mmdebstrap:
     - mkdir -p $1/usr/share/keyrings/
     - curl -fsSL https://download.docker.com/linux/debian/gpg -o $1/usr/share/keyrings/docker.asc
     - chmod a+r $1/usr/share/keyrings/docker.asc
-    - cp -p $1/usr/share/keyrings/docker.asc $IGconf_sys_apt_keydir
+    - cp -p $1/usr/share/keyrings/docker.asc $KSconf_sys_apt_keydir
   packages:
     - docker-ce
     - docker-ce-cli

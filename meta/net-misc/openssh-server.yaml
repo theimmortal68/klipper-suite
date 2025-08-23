@@ -4,17 +4,17 @@ mmdebstrap:
   packages:
     - openssh-server
   customize-hooks:
-    - mkdir -p $1/home/${IGconf_device_user1}/.ssh
+    - mkdir -p $1/home/${KSconf_device_user1}/.ssh
     - |-
-      if [ -z ${IGconf_meta_ssh_pubkey_user1+x} ]; then
-         touch $1/home/${IGconf_device_user1}/.ssh/authorized_keys
-      elif [ -f "$IGconf_meta_ssh_pubkey_user1" ] ; then
-         cat $IGconf_meta_ssh_pubkey_user1 > $1/home/${IGconf_device_user1}/.ssh/authorized_keys
+      if [ -z ${KSconf_meta_ssh_pubkey_user1+x} ]; then
+         touch $1/home/${KSconf_device_user1}/.ssh/authorized_keys
+      elif [ -f "$KSconf_meta_ssh_pubkey_user1" ] ; then
+         cat $KSconf_meta_ssh_pubkey_user1 > $1/home/${KSconf_device_user1}/.ssh/authorized_keys
       else
-         echo "$IGconf_meta_ssh_pubkey_user1" > $1/home/${IGconf_device_user1}/.ssh/authorized_keys
+         echo "$KSconf_meta_ssh_pubkey_user1" > $1/home/${KSconf_device_user1}/.ssh/authorized_keys
       fi
     - |-
-      if igconf isy meta_sshd_pubkey_only ; then
+      if ksconf isy meta_sshd_pubkey_only ; then
          mkdir -p $1/etc/ssh/sshd_config.d
          cat <<- 'EOCHROOT' > $1/etc/ssh/sshd_config.d/01pubkey-only.conf
       PermitRootLogin no

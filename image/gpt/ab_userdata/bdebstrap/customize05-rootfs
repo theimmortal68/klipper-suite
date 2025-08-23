@@ -7,8 +7,8 @@ install -m 0644 -D ../device/slot.rules $1/etc/udev/rules.d/90-rpi-slot.rules
 
 
 # Install provision map
-if igconf isset image_pmap ; then
-   cp ../device/provisionmap-${IGconf_image_pmap}.json ${IGconf_sys_outputdir}/provisionmap.json
+if ksconf isset image_pmap ; then
+   cp ../device/provisionmap-${KSconf_image_pmap}.json ${KSconf_sys_outputdir}/provisionmap.json
 else
    die "No pmap. Unable to generate slot mapping."
 fi
@@ -23,10 +23,10 @@ SYSTEMA_UUID=$(uuidgen)
 SYSTEMB_UUID=$(uuidgen)
 CRYPT_UUID=$(uuidgen)
 
-rm -f ${IGconf_sys_outputdir}/img_uuids
+rm -f ${KSconf_sys_outputdir}/img_uuids
 for v in BOOTA_LABEL BOOTA_UUID BOOTB_LABEL BOOTB_UUID SYSTEMA_UUID SYSTEMB_UUID CRYPT_UUID; do
     eval "val=\$$v"
-    echo "$v=$val" >> "${IGconf_sys_outputdir}/img_uuids"
+    echo "$v=$val" >> "${KSconf_sys_outputdir}/img_uuids"
 done
 
 
@@ -36,11 +36,11 @@ sed -i \
    -e "s|<BOOTB_UUID>|$BOOTB_UUID|g" \
    -e "s|<SYSTEMA_UUID>|$SYSTEMA_UUID|g" \
    -e "s|<SYSTEMB_UUID>|$SYSTEMB_UUID|g" \
-   -e "s|<CRYPT_UUID>|$CRYPT_UUID|g" ${IGconf_sys_outputdir}/provisionmap.json
+   -e "s|<CRYPT_UUID>|$CRYPT_UUID|g" ${KSconf_sys_outputdir}/provisionmap.json
 
 
 # Generate slot helper
-mkslot-helper ${IGconf_sys_outputdir}/provisionmap.json > $1/usr/bin/rpi-slot
+mkslot-helper ${KSconf_sys_outputdir}/provisionmap.json > $1/usr/bin/rpi-slot
 chmod +x $1/usr/bin/rpi-slot
 
 

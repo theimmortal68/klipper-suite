@@ -9,7 +9,7 @@ shift 1
 dirs=()
 dirs+=("${IGIMAGE}/bdebstrap")
 dirs+=("${IGDEVICE}/bdebstrap")
-[[ -n ${IGconf_ext_dir+x} ]] && dirs+=("${IGconf_ext_dir}/bdebstrap")
+[[ -n ${KSconf_ext_dir+x} ]] && dirs+=("${KSconf_ext_dir}/bdebstrap")
 dirs+=("${IGTOP}/scripts/bdebstrap")
 
 case "$op" in
