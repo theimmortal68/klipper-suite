@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Build an ARM64 Debian Bookworm image using bdebstrap + genimage,
 # running bdebstrap under `podman unshare` with inline hooks (no bin/runner).
-# Keyrings/sources are handled entirely in YAML (mmdebstrap.keyrings / setup-hooks).
+# NOTE: All APT/keyring/source configuration should be handled in YAML layers.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 . "${ROOT}/options.sh"
 
-# Make $KS_TOP available to YAML (for $KS_TOP/keys/... paths)
+# Make $KS_TOP available to YAML (for $KS_TOP/keys/... paths etc.)
 export KS_TOP="${ROOT}"
 
 # ------------------------- arg parsing ----------------------------------------
@@ -112,7 +112,7 @@ set -euxo pipefail
 export DEBIAN_FRONTEND=noninteractive
 . /etc/ks/options.sh
 
-# Ensure RPi boot dir exists (Bookworm layout); harmless on non-RPi.
+# Ensure RPi-style boot dir exists (harmless on non-RPi)
 mkdir -p /boot/firmware
 
 # Hostname + hosts
@@ -165,7 +165,7 @@ touch /root/BUILD_OK
 EOSH
 chmod +x "${APPLY}"
 
-# ------------------------- base bdebstrap YAML (no keyrings here) ------------
+# ------------------------- base bdebstrap YAML (no APT files/keys here) ------
 BDEB_CFG_BASE="${OUT_DIR}/bdebstrap.base.yaml"
 cat > "${BDEB_CFG_BASE}" <<EOF
 ---
