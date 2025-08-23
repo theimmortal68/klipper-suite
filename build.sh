@@ -321,7 +321,7 @@ fi
 
 
 # Auto-selected layers
-if ksconf_isy device_ssh_user1 ; then
+if ksconf_isy device_ssh_new_user ; then
    layer_push auto common/openssh-server
 fi
 

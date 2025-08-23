@@ -4,14 +4,14 @@ mmdebstrap:
   packages:
     - openssh-server
   customize-hooks:
-    - mkdir -p $1/home/${KSconf_device_user1}/.ssh
+    - mkdir -p $1/home/${KSconf_device_new_user}/.ssh
     - |-
-      if [ -z ${KSconf_meta_ssh_pubkey_user1+x} ]; then
-         touch $1/home/${KSconf_device_user1}/.ssh/authorized_keys
-      elif [ -f "$KSconf_meta_ssh_pubkey_user1" ] ; then
-         cat $KSconf_meta_ssh_pubkey_user1 > $1/home/${KSconf_device_user1}/.ssh/authorized_keys
+      if [ -z ${KSconf_meta_ssh_pubkey_new_user+x} ]; then
+         touch $1/home/${KSconf_device_new_user}/.ssh/authorized_keys
+      elif [ -f "$KSconf_meta_ssh_pubkey_new_user" ] ; then
+         cat $KSconf_meta_ssh_pubkey_new_user > $1/home/${KSconf_device_new_user}/.ssh/authorized_keys
       else
-         echo "$KSconf_meta_ssh_pubkey_user1" > $1/home/${KSconf_device_user1}/.ssh/authorized_keys
+         echo "$KSconf_meta_ssh_pubkey_new_user" > $1/home/${KSconf_device_new_user}/.ssh/authorized_keys
       fi
     - |-
       if ksconf isy meta_sshd_pubkey_only ; then
