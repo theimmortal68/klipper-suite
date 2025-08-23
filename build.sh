@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Build an ARM64 Debian Bookworm image using bdebstrap + genimage,
-# running bdebstrap under `podman unshare` with inline hooks (no bin/runner).
-# NOTE: All APT/keyring/source configuration is handled in YAML layers.
+# running bdebstrap under `podman unshare`.
+# Keys are assembled on the host and injected via setup-hooks (no YAML key hooks).
+# Includes color output and base customize steps for user/locale/timezone.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 . "${ROOT}/options.sh"
 
-# Make $KS_TOP available and also use it to expand YAML later.
-export KS_TOP="${ROOT}"
+export KS_TOP="${ROOT}"   # for any ${KS_TOP} usages inside layers if present
 
 # ------------------------- arg parsing ----------------------------------------
 while [[ $# -gt 0 ]]; do
@@ -55,7 +55,6 @@ need rsync
 need zstd
 need mkfs.vfat         # dosfstools
 need mke2fs            # e2fsprogs
-# yq only needed if you actually use devices/<dev>/layers.yaml
 if [[ -f "${ROOT}/devices/${KS_DEVICE}/layers.yaml" ]]; then
   need yq
 fi
@@ -72,10 +71,9 @@ BOOT_IMG="${OUT_DIR}/boot.vfat"
 BDEB_CFG_BASE="${OUT_DIR}/bdebstrap.base.yaml"
 DEV_DIR="${ROOT}/devices/${KS_DEVICE}"
 DEV_LAYERS="${DEV_DIR}/layers.yaml"
-EXP_LAYERS_DIR="${OUT_DIR}/expanded-layers"
 
-sudo rm -rf "${ROOTFS}" "${IMG_DIR}" "${TMP_DIR}" "${BOOT_IMG}" "${BDEB_CFG_BASE}" "${CFG_AUTO}" "${EXP_LAYERS_DIR}" || true
-mkdir -p "${OUT_DIR}" "${IMG_DIR}" "${TMP_DIR}" "${ROOTFS}" "${EXP_LAYERS_DIR}"
+sudo rm -rf "${ROOTFS}" "${IMG_DIR}" "${TMP_DIR}" "${BOOT_IMG}" "${BDEB_CFG_BASE}" "${CFG_AUTO}" || true
+mkdir -p "${OUT_DIR}" "${IMG_DIR}" "${TMP_DIR}" "${ROOTFS}"
 
 # mirror console to file; strip ANSI for the saved log if colors are on
 if $_color_on; then
@@ -105,32 +103,36 @@ else
   warn "No device layer file at ${DEV_LAYERS}; continuing with base config only."
 fi
 
-# ------------------------- expand $KS_TOP in layer YAMLs ----------------------
-expand_yaml() {
-  local in="$1" out="$2"
-  if command -v envsubst >/dev/null 2>&1; then
-    # Expand all ${VAR} / $VAR references with current env; safest.
-    envsubst < "$in" > "$out"
-  else
-    # Fallback: expand only $KS_TOP (common for keyring/source paths).
-    # Escape & in replacement to avoid sed backrefs.
-    local repl="${KS_TOP//&/\\&}"
-    sed "s|\\$KS_TOP|${repl}|g" "$in" > "$out"
-  fi
-}
+# ------------------------- assemble host APT keydir ---------------------------
+section "Assemble APT keys (host)"
+KS_APT_KEYDIR="${OUT_DIR}/keys"
+mkdir -p "${KS_APT_KEYDIR}"
 
-EXPANDED_LAYER_CFGS=()
-if [[ ${#LAYER_CFGS[@]} -gt 0 ]]; then
-  section "Expanding layer YAMLs"
-  for rel in "${LAYER_CFGS[@]}"; do
-    src="${ROOT}/${rel}"
-    [[ -f "$src" ]] || { error "Missing layer config: $rel"; exit 1; }
-    dst="${EXP_LAYERS_DIR}/$(basename "$rel")"
-    expand_yaml "$src" "$dst"
-    EXPANDED_LAYER_CFGS+=("$dst")
-    info "expanded: ${rel} -> ${dst}"
-  done
+# 1) System keyrings
+if [[ -d /usr/share/keyrings ]]; then
+  rsync -a /usr/share/keyrings/ "${KS_APT_KEYDIR}/"
 fi
+# 2) User keyrings (if any on self-hosted or local runs)
+if [[ -d "${HOME}/.local/share/keyrings" ]]; then
+  rsync -a "${HOME}/.local/share/keyrings/" "${KS_APT_KEYDIR}/"
+fi
+# 3) Repo-provided key bundles (support both 'keydir' and 'keys')
+if [[ -d "${ROOT}/keydir" ]]; then
+  rsync -a "${ROOT}/keydir/" "${KS_APT_KEYDIR}/"
+fi
+if [[ -d "${ROOT}/keys" ]]; then
+  rsync -a "${ROOT}/keys/" "${KS_APT_KEYDIR}/"
+fi
+
+# Normalize Raspberry Pi key name if vendored as *-stable.gpg
+if [[ -f "${KS_APT_KEYDIR}/raspberrypi-archive-stable.gpg" && ! -f "${KS_APT_KEYDIR}/raspberrypi-archive-keyring.gpg" ]]; then
+  cp -f "${KS_APT_KEYDIR}/raspberrypi-archive-stable.gpg" \
+        "${KS_APT_KEYDIR}/raspberrypi-archive-keyring.gpg"
+fi
+
+[[ -d "${KS_APT_KEYDIR}" ]] || { error "apt keydir ${KS_APT_KEYDIR} is invalid"; exit 1; }
+info "Keydir assembled at: ${KS_APT_KEYDIR}"
+ls -l "${KS_APT_KEYDIR}" || true
 
 # ------------------------- in-chroot apply script -----------------------------
 APPLY="$(mktemp)"
@@ -140,7 +142,7 @@ set -euxo pipefail
 export DEBIAN_FRONTEND=noninteractive
 . /etc/ks/options.sh
 
-# Ensure RPi-style boot dir exists (harmless on non-RPi)
+# Ensure RPi boot dir exists (Bookworm layout)
 mkdir -p /boot/firmware
 
 # Hostname + hosts
@@ -155,7 +157,7 @@ grep -qE "^${KS_LOCALE}" /etc/locale.gen || echo "${KS_LOCALE} UTF-8" >> /etc/lo
 locale-gen
 update-locale LANG="${KS_LOCALE}"
 
-# Minimal boot configs if none provided by packages/layers
+# Minimal RPi boot configs if none provided by packages/layers
 if [ ! -s /boot/firmware/config.txt ]; then
   cat > /boot/firmware/config.txt <<CONF
 [all]
@@ -193,18 +195,11 @@ touch /root/BUILD_OK
 EOSH
 chmod +x "${APPLY}"
 
-# ------------------------- base bdebstrap YAML (no APT files/keys in script) --
+# ------------------------- base bdebstrap YAML --------------------------------
 BDEB_CFG_BASE="${OUT_DIR}/bdebstrap.base.yaml"
 cat > "${BDEB_CFG_BASE}" <<EOF
 ---
 name: ${KS_DEVICE}-${KS_PROFILE}-${KS_SUITE}-${KS_ARCH}
-env:
-  KS_TZ_AREA: "${KS_TZ_AREA}"
-  KS_TZ_CITY: "${KS_TZ_CITY}"
-  KS_LOCALE_DEFAULT: "${KS_LOCALE_DEFAULT}"
-  KS_LOCALE_GEN: "${KS_LOCALE_GEN}"
-  KS_KB_KEYMAP: "${KS_KB_KEYMAP}"
-
 mmdebstrap:
   suite: ${KS_SUITE}
   architectures:
@@ -219,11 +214,11 @@ $(printf '    - %s\n' ${KS_COMPONENTS//,/ })
   packages:
 $(printf '    - %s\n' ${KS_PACKAGES//,/ })
   essential-hooks:
-    - echo tzdata tzdata/Areas select "\$KS_TZ_AREA" | chroot \$1 debconf-set-selections
-    - echo tzdata tzdata/Zones/\$KS_TZ_AREA select "\$KS_TZ_CITY" | chroot \$1 debconf-set-selections
-    - echo locales locales/locales_to_be_generated multiselect "\$KS_LOCALE_GEN" | chroot \$1 debconf-set-selections
-    - echo locales locales/default_environment_locale select "\$KS_LOCALE_DEFAULT" | chroot \$1 debconf-set-selections
-    - echo keyboard-configuration keyboard-configuration/xkb-keymap select "\$KS_KB_KEYMAP" | chroot \$1 debconf-set-selections
+    - echo tzdata tzdata/Areas select "${KS_TZ_AREA}" | chroot \$1 debconf-set-selections
+    - echo tzdata tzdata/Zones/${KS_TZ_AREA} select "${KS_TZ_CITY}" | chroot \$1 debconf-set-selections
+    - echo locales locales/locales_to_be_generated multiselect "${KS_LOCALE_GEN}" | chroot \$1 debconf-set-selections
+    - echo locales locales/default_environment_locale select "${KS_LOCALE_DEFAULT}" | chroot \$1 debconf-set-selections
+    - echo keyboard-configuration keyboard-configuration/xkb-keymap select "${KS_KB_KEYMAP}" | chroot \$1 debconf-set-selections
   customize-hooks:
     - copy-in ${ROOT}/options.sh /etc/ks/options.sh
     - copy-in ${APPLY} /apply.sh
@@ -238,19 +233,24 @@ section "bdebstrap (podman unshare)"
 
 cmd=(podman unshare bdebstrap)
 
-# Main config and expanded layer configs
+# Main config and optional layer configs
 cmd+=(--config "${BDEB_CFG_BASE}")
-for f in "${EXPANDED_LAYER_CFGS[@]}"; do
-  cmd+=(-c "${f}")
+for f in "${LAYER_CFGS[@]}"; do
+  [[ -f "${ROOT}/${f}" ]] || { error "Missing layer config: ${f}"; exit 1; }
+  cmd+=(-c "${ROOT}/${f}")
 done
 
-# Force directory target regardless of layer YAML
+# Force dir output and set naming
 cmd+=(--force --verbose --debug)
 cmd+=(--name "${KS_DEVICE}-${KS_PROFILE}-${KS_SUITE}-${KS_ARCH}")
 cmd+=(--hostname "${KS_HOSTNAME}")
 cmd+=(--output "${OUT_DIR}")
 cmd+=(--target "${ROOTFS}")
 cmd+=(--format dir)
+
+# Inject assembled keydir into target early so mirrors with signed-by= work
+cmd+=(--setup-hook 'mkdir -p "$1/usr/share/keyrings"')
+cmd+=(--setup-hook "sync-in ${KS_APT_KEYDIR}/ /usr/share/keyrings")
 
 # Run from repo root so relative paths in hooks resolve
 pushd "${ROOT}" >/dev/null
@@ -265,7 +265,7 @@ dd if=/dev/zero of="${BOOT_IMG}" bs=1M count="${KS_BOOT_SIZE_MIB}" status=none
 mkfs.vfat -n "${KS_BOOT_LABEL}" "${BOOT_IMG}"
 TMP_BOOT="$(mktemp -d)"
 sudo mount -o loop "${BOOT_IMG}" "${TMP_BOOT}"
-sudo rsync -aH --delete "${ROOTFS}/boot/firmware/" "${TMP_BOOT}/"
+sudo rsync -aH --delete "${ROOTFS}/boot/firmware/" "${TMP_BOOT}/" || true
 sync; sudo umount "${TMP_BOOT}"; rmdir "${TMP_BOOT}"
 
 # ------------------------- compute rootfs size --------------------------------
