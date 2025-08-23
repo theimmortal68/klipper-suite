@@ -3,7 +3,7 @@
 name: raspi-repo
 mmdebstrap:
   # Put the key inside the target rootfs before customize hooks run apt-get update.
-  essential-hooks:
+  setup-hooks:
     - mkdir -p $1/usr/share/keyrings
     - copy-in ${KS_TOP}/keys/raspberrypi-archive-stable.gpg /usr/share/keyrings/raspberrypi-archive-stable.gpg
     - chmod 0644 $1/usr/share/keyrings/raspberrypi-archive-stable.gpg
