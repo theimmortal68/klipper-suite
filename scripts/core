@@ -68,7 +68,6 @@ aggregate_config() {
    merge_config_section device "$cfg"
    merge_config_section image "$cfg"
    merge_config_section sys "$cfg"
-   merge_config_section sbom "$cfg"
    merge_config_section meta "$cfg"
 }
 

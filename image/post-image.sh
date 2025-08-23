@@ -41,10 +41,7 @@ for f in "${IGconf_sys_outputdir}/${IGconf_image_name}"*.${IGconf_image_suffix} 
    truncate -s %${IGconf_device_sector_size} $f
 done
 
-files+=("${IGconf_sys_outputdir}/${IGconf_image_name}"*.${IGconf_image_suffix}.sparse)
-files+=("${IGconf_sys_outputdir}/${IGconf_image_name}"*.sbom)
-
-msg "Deploying image and SBOM"
+msg "Deploying image"
 
 for f in "${files[@]}" ; do
    [[ -f "$f" ]] || continue
