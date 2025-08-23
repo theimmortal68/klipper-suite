@@ -3,18 +3,3 @@ profiles:
   base:
     - bconf/debian/bookworm.yaml
     - bconf/raspios/repo.yaml
-    - bconf/raspios/firmware.yaml
-    - bconf/raspios/rpi5-kernel.yaml
-  klipper:
-    - bconf/debian/bookworm.yaml
-    - bconf/raspios/repo.yaml
-    - bconf/raspios/firmware.yaml
-    - bconf/raspios/rpi5-kernel.yaml
-  mainsailos:
-    - bconf/debian/bookworm.yaml
-    - bconf/raspios/repo.yaml
-    - bconf/raspios/firmware.yaml
-    - bconf/raspios/rpi5-kernel.yaml
-    - bconf/debian/bookworm.yaml
-    - bconf/raspios/firmware.yaml
-    - bconf/raspios/rpi5-kernel.yaml
