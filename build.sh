@@ -101,7 +101,7 @@ IGTOP_IMAGE="${IGTOP}/image"
 IGTOP_PROFILE="${IGTOP}/profile"
 META="${IGTOP}/meta"
 META_HOOKS="${IGTOP}/meta-hooks"
-RPI_TEMPLATES="${IGTOP}/templates/rpi"
+KS_TEMPLATES="${IGTOP}/templates"
 
 
 # Establish the top level directory hierarchy by detecting the config file
@@ -244,7 +244,7 @@ for v in $(compgen -A variable -X '!KSconf*') ; do
 done
 ENV_ROOTFS+=('--env' IGTOP=$IGTOP)
 ENV_ROOTFS+=('--env' META_HOOKS=$META_HOOKS)
-ENV_ROOTFS+=('--env' RPI_TEMPLATES=$RPI_TEMPLATES)
+ENV_ROOTFS+=('--env' KS_TEMPLATES=$KS_TEMPLATES)
 
 for i in IGDEVICE IGIMAGE IGPROFILE ; do
    ENV_ROOTFS+=('--env' ${i}="${!i}")
