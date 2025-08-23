@@ -6,7 +6,7 @@ mmdebstrap:
     # - mkdir -p $1/usr/share/keyrings
     # - copy-in ${KS_TOP}/keys/raspberrypi-archive-stable.gpg /usr/share/keyrings/raspberrypi-archive-stable.gpg
     # - chmod 0644 $1/usr/share/keyrings/raspberrypi-archive-stable.gpg
-    - copy-in ${KS_TOP}/keys/raspberrypi-archive-keyring.gpg /etc/apt/trusted.gpg.d/"
+    - copy-in ${KS_TOP}/keys/raspberrypi-archive-keyring.gpg /etc/apt/trusted.gpg.d/
   # Raspberry Pi APT source (arm64)
   packages:
     - raspberrypi-archive-keyring
