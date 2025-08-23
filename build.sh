@@ -11,7 +11,7 @@ IGTOP=$(readlink -f $(dirname "$0"))
 
 EXTERNAL_DIR=""
 EXTERNAL_NSDIR=""
-INCONFIG="generic64-test"
+INCONFIG="generic64-apt-simple"
 OVERRIDES=""
 ROOTFS_ONLY=""
 IMAGE_ONLY=""
@@ -59,18 +59,19 @@ else
     INCONFIG="$IGCONFIG/$INCONFIG"
 fi
 
-aggregate_config "$INCONFIG"
+# NOTE: scripts/core provides merge_config (not aggregate_config)
+merge_config "$INCONFIG"
 
 [ -n "${IGconf_image_layout:-}" ] || die "IGconf_image_layout not set"
 [ -n "${IGconf_device_class:-}" ] || die "IGconf_device_class not set"
 [ -n "${IGconf_device_profile:-}" ] || die "IGconf_device_profile not set"
 
-# resolve directories
+# resolve directories for the selected device/image/profile
 IGDEVICE="$IGTOP/device/$IGconf_device_class"
 IGIMAGE="$IGTOP/image/$IGconf_image_layout"
 IGPROFILE="$IGTOP/profile/$IGconf_device_profile"
 
-# merge defaults/options
+# merge defaults/options (SBOM references removed)
 aggregate_options "$IGDEVICE/config.options"
 aggregate_options "$IGDEVICE/build.defaults"
 aggregate_options "$IGDEVICE/provision.defaults"
@@ -83,6 +84,17 @@ aggregate_options "$IGTOP/image/provision.defaults"
 aggregate_options "$IGTOP/sys-build.defaults"
 aggregate_options "$IGTOP/meta/defaults"
 [ -n "$OVERRIDES" ] && aggregate_options "$OVERRIDES"
+
+# assemble meta layers from profiles
+ARGS_LAYERS=()
+load_profile main "$IGPROFILE"
+if [ -n "${IGconf_image_profile:-}" ] && [ -f "$IGIMAGE/profile/$IGconf_image_profile" ]; then
+    load_profile image "$IGIMAGE/profile/$IGconf_image_profile"
+fi
+# convenience: auto-add ssh server if requested
+if [ "${IGconf_device_ssh_user1:-false}" = "true" ]; then
+    layer_push auto "net-misc/openssh-server"
+fi
 
 # apt keydir
 if [ -z "${IGconf_sys_apt_keydir:-}" ]; then
@@ -139,7 +151,7 @@ PATH_POST_BUILD="$IGTOP/bin"
 [ -n "${IGconf_ext_nsdir:-}" ] && PATH_ROOTFS="$IGconf_ext_nsdir/bin:$PATH_ROOTFS" && PATH_POST_BUILD="$IGconf_ext_nsdir/bin:$PATH_POST_BUILD"
 PATH_POST_BUILD="$IGconf_sys_workdir/host/bin:$PATH_POST_BUILD"
 
-# meta layer helpers
+# meta layer helpers (unchanged)
 layer_push() {
     scope="$1"; shift; name="$1"
     case "$scope" in
@@ -173,9 +185,9 @@ load_profile() {
     done < "$file"
 }
 
-# pre-build hooks
-[ -x "$IGTOP_DEVICE/pre-build.sh" ] && runh "$IGTOP_DEVICE/pre-build.sh"
-[ -x "$IGTOP_IMAGE/pre-build.sh" ] && runh "$IGTOP_IMAGE/pre-build.sh"
+# pre-build hooks (fix undefined IGTOP_* vars)
+[ -x "$IGTOP/device/pre-build.sh" ] && runh "$IGTOP/device/pre-build.sh"
+[ -x "$IGTOP/image/pre-build.sh" ] && runh "$IGTOP/image/pre-build.sh"
 [ -x "$IGIMAGE/pre-build.sh" ] && runh "$IGIMAGE/pre-build.sh"
 [ -x "$IGDEVICE/pre-build.sh" ] && runh "$IGDEVICE/pre-build.sh"
 
@@ -190,8 +202,7 @@ if [ -z "$IMAGE_ONLY" ]; then
         --setup-hook 'bin/runner setup "$@"' \
         --essential-hook 'bin/runner essential "$@"' \
         --customize-hook 'bin/runner customize "$@"' \
-        --cleanup-hook 'bin/runner cleanup "$@"' \
-        --verbose --debug
+        --cleanup-hook 'bin/runner cleanup "$@"'
 
     if [ -f "$IGconf_sys_target" ]; then
         exit 0
