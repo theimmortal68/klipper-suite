@@ -72,14 +72,14 @@ jobs:
           sudo apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=600 install -y qemu-user-static binfmt-support
           sudo update-binfmts --enable qemu-aarch64 || true
 
-      # - name: Provide Debian archive signing keys for mmdebstrap
-      #   run: |
-      #     set -eux
-      #     sudo apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=600 update
-      #     sudo apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=600 install -y debian-archive-keyring
-      #     mkdir -p keydir
-      #     cp /usr/share/keyrings/debian-archive-keyring.gpg keydir/
-      #     ls -l keydir
+      - name: Provide Debian archive signing keys for mmdebstrap
+        run: |
+          set -eux
+          sudo apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=600 update
+          sudo apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=600 install -y debian-archive-keyring
+          mkdir -p keydir
+          cp /usr/share/keyrings/debian-archive-keyring.gpg keydir/
+          ls -l keydir
 
       - name: Build image
         run: |
