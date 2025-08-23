@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build an ARM64 Debian Bookworm image using bdebstrap + genimage,
 # running bdebstrap under `podman unshare`.
-# Keys are assembled on the host and injected via setup-hooks (no YAML key hooks).
+# Keys are assembled on the host and injected via hooks in the YAML (no --setup-hook in CLI).
 # Includes color output and base customize steps for user/locale/timezone.
 set -euo pipefail
 
@@ -9,7 +9,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 . "${ROOT}/options.sh"
 
-export KS_TOP="${ROOT}"   # for any ${KS_TOP} usages inside layers if present
+export KS_TOP="${ROOT}"   # Available to any shell hooks (not used in special hooks)
 
 # ------------------------- arg parsing ----------------------------------------
 while [[ $# -gt 0 ]]; do
@@ -112,7 +112,7 @@ mkdir -p "${KS_APT_KEYDIR}"
 if [[ -d /usr/share/keyrings ]]; then
   rsync -a /usr/share/keyrings/ "${KS_APT_KEYDIR}/"
 fi
-# 2) User keyrings (if any on self-hosted or local runs)
+# 2) User keyrings (local/self-hosted)
 if [[ -d "${HOME}/.local/share/keyrings" ]]; then
   rsync -a "${HOME}/.local/share/keyrings/" "${KS_APT_KEYDIR}/"
 fi
@@ -124,11 +124,11 @@ if [[ -d "${ROOT}/keys" ]]; then
   rsync -a "${ROOT}/keys/" "${KS_APT_KEYDIR}/"
 fi
 
-# Normalize Raspberry Pi key name both ways so layers/sources can use either.
-if [[ -e "${KS_APT_KEYDIR}/raspberrypi-archive-keyring.gpg" && ! -e "${KS_APT_KEYDIR}/raspberrypi-archive-stable.gpg" ]]; then
+# Normalize Raspberry Pi key names (either name may be referenced by layers)
+if [[ -f "${KS_APT_KEYDIR}/raspberrypi-archive-keyring.gpg" && ! -e "${KS_APT_KEYDIR}/raspberrypi-archive-stable.gpg" ]]; then
   ln -sf raspberrypi-archive-keyring.gpg "${KS_APT_KEYDIR}/raspberrypi-archive-stable.gpg"
 fi
-if [[ -e "${KS_APT_KEYDIR}/raspberrypi-archive-stable.gpg" && ! -e "${KS_APT_KEYDIR}/raspberrypi-archive-keyring.gpg" ]]; then
+if [[ -f "${KS_APT_KEYDIR}/raspberrypi-archive-stable.gpg" && ! -e "${KS_APT_KEYDIR}/raspberrypi-archive-keyring.gpg" ]]; then
   ln -sf raspberrypi-archive-stable.gpg "${KS_APT_KEYDIR}/raspberrypi-archive-keyring.gpg"
 fi
 
@@ -159,7 +159,7 @@ grep -qE "^${KS_LOCALE}" /etc/locale.gen || echo "${KS_LOCALE} UTF-8" >> /etc/lo
 locale-gen
 update-locale LANG="${KS_LOCALE}"
 
-# Minimal RPi boot configs if none provided by packages/layers
+# Minimal boot configs if none provided by packages/layers
 if [ ! -s /boot/firmware/config.txt ]; then
   cat > /boot/firmware/config.txt <<CONF
 [all]
@@ -197,7 +197,7 @@ touch /root/BUILD_OK
 EOSH
 chmod +x "${APPLY}"
 
-# ------------------------- base bdebstrap YAML --------------------------------
+# ------------------------- base bdebstrap YAML (hooks live here) --------------
 BDEB_CFG_BASE="${OUT_DIR}/bdebstrap.base.yaml"
 cat > "${BDEB_CFG_BASE}" <<EOF
 ---
@@ -222,13 +222,31 @@ $(printf '    - %s\n' ${KS_PACKAGES//,/ })
     - echo locales locales/default_environment_locale select "${KS_LOCALE_DEFAULT}" | chroot \$1 debconf-set-selections
     - echo keyboard-configuration keyboard-configuration/xkb-keymap select "${KS_KB_KEYMAP}" | chroot \$1 debconf-set-selections
   customize-hooks:
+    # Provide options + apply script
     - copy-in ${ROOT}/options.sh /etc/ks/options.sh
     - copy-in ${APPLY} /apply.sh
+
+    # Seed keyrings from the host-assembled directory (absolute path expanded here)
+    - mkdir -p \$1/usr/share/keyrings
+    - sync-in ${KS_APT_KEYDIR}/ /usr/share/keyrings
+
+    # Normalize RPi key filenames inside the target so both names work
+    - chroot "\$1" bash -eux -c '
+        cd /usr/share/keyrings;
+        if [ -e raspberrypi-archive-keyring.gpg ] && [ ! -e raspberrypi-archive-stable.gpg ]; then
+          ln -sf raspberrypi-archive-keyring.gpg raspberrypi-archive-stable.gpg;
+        fi;
+        if [ -e raspberrypi-archive-stable.gpg ] && [ ! -e raspberrypi-archive-keyring.gpg ]; then
+          ln -sf raspberrypi-archive-stable.gpg raspberrypi-archive-keyring.gpg;
+        fi
+      '
+
+    # Apply base customization (user/locale/timezone/boot)
     - chroot "\$1" bash -eux /apply.sh
 EOF
 
 section "Generated bdebstrap.base.yaml (head)"
-sed -n '1,120p' "${BDEB_CFG_BASE}" || true
+sed -n '1,160p' "${BDEB_CFG_BASE}" || true
 
 # ------------------------- run bdebstrap (podman unshare) ---------------------
 section "bdebstrap (podman unshare)"
@@ -250,17 +268,7 @@ cmd+=(--output "${OUT_DIR}")
 cmd+=(--target "${ROOTFS}")
 cmd+=(--format dir)
 
-# Make KS_TOP visible to all hooks (layer hooks may use it)
-cmd+=(-e "KS_TOP=${ROOT}")
-
-# Inject assembled keydir into target early so mirrors with signed-by= work
-cmd+=(--setup-hook 'mkdir -p "$1/usr/share/keyrings"')
-cmd+=(--setup-hook "sync-in ${KS_APT_KEYDIR}/ /usr/share/keyrings")
-
-# Ensure both RPi key filenames exist inside target to satisfy various sources
-cmd+=(--setup-hook 'bash -euxc '\''cd "$1/usr/share/keyrings"; \
-  { [[ -e raspberrypi-archive-stable.gpg ]] || ln -sf raspberrypi-archive-keyring.gpg raspberrypi-archive-stable.gpg; }; \
-  { [[ -e raspberrypi-archive-keyring.gpg ]] || ln -sf raspberrypi-archive-stable.gpg raspberrypi-archive-keyring.gpg; }'\''')
+# No --setup-hook here by design
 
 # Run from repo root so relative paths in hooks resolve
 pushd "${ROOT}" >/dev/null
