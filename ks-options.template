@@ -1,50 +1,11 @@
 # ks-options.template
-# Generated: fill values to override defaults. Keys left empty will clear/unset.
-
-# ---- image ----
-image_boot_part_size= # default: 100%
-image_compression=zstd # default: none
-image_layout=
-image_name= # default: "${KSconf_device_class}-${KSconf_device_variant}-${KSconf_image_version}"
-image_pmap= # default: clear
-image_profile= # default: required-base
-image_ptable_protect= # default: y
-image_root_part_size= # default: 100%
-image_rootfs_type= # default: ext4
-image_suffix= # default: img
-image_system_part_size= # default: 100%
-image_version= # default: $(date +%Y-%m-%d)
 
 # ---- device ----
-device_class=
-device_hostname= # default: raspberrypi
-device_keyboard_keymap=us # default: gb
-device_keyboard_layout="English (US)" # default: "English (UK)"
-device_locale1="en_US.UTF-8" # default: "en_GB.UTF-8"
-device_profile=
-device_sector_size= # default: 512
-device_ssh_user1=y # default: n
-device_storage_type= # default: sd
-device_timezone=America/New_York # default: "Europe/London"
-device_timezone_area=
-device_timezone_city=
+device_hostname=raspberrypi
+device_keyboard_keymap=us
+device_keyboard_layout="English (US)"
+device_locale1="en_US.UTF-8"
+device_ssh_user1=y
+device_timezone=America/New_York
 device_user1= # default: pi
 device_user1pass=raspberry
-device_variant= # default: zero2w
-
-# ---- sys ----
-sys_apt_get_purge= # default: y
-sys_apt_keydir=
-sys_apt_proxy_http=
-sys_deploydir= # default: "${KSconf_sys_workdir}/deploy"
-sys_outputdir= # default: "${KSconf_sys_workdir}/artefacts"
-sys_target= # default: "${KSconf_sys_workdir}/rootfs"
-sys_workdir= # default: "${IGTOP}/work/${KSconf_image_name}"
-
-# ---- meta ----
-meta_ssh_pubkey_user1=
-
-# ---- ext ----
-# Usually set via CLI (-D / -N); only use here if you need to force it.
-ext_dir=
-ext_nsdir=
