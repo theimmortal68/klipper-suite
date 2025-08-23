@@ -5,7 +5,7 @@ set -euo pipefail
 def() { eval ": \${$1:=$2}"; export "$1"; }
 
 # ---- Device + Profile selectors ---------------------------------------------
-def KS_DEVICE   "raspi"      # devices/<device>/layers.yaml (optional)
+def KS_DEVICE   "rpi5"      # devices/<device>/layers.yaml (optional)
 def KS_PROFILE  "base"       # base | klipper | mainsailos | ratos
 
 # ---- Build target (ARM64) ---------------------------------------------------
