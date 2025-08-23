@@ -6,11 +6,11 @@ mmdebstrap:
   customize-hooks:
     - >
       chroot "$1" sh -eu -c '
-        U="${KSconf_device_user:?KSconf_device_user must be set}"
+        U="${KSconf_device_new_user:?KSconf_device_new_user must be set}"
 
         # 1) (Optional) set password if provided (plaintext or crypt hash)
-        if [ -n "${KSconf_device_password:-}" ]; then
-          P="${KSconf_device_password}"
+        if [ -n "${KSconf_device_new_userpass:-}" ]; then
+          P="${KSconf_device_new_userpass}"
           case "$P" in
             \$6\$*|\$5\$*|\$2*|\$y\$*|\$argon2*) echo "$U:$P" | chpasswd -e ;;
             *)                                   echo "$U:$P" | chpasswd    ;;
