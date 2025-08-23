@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Build an ARM64 Debian Bookworm image using bdebstrap + genimage,
 # running bdebstrap under `podman unshare` with inline hooks (no bin/runner).
-# NOTE: All APT/keyring/source configuration should be handled in YAML layers.
+# NOTE: All APT/keyring/source configuration is handled in YAML layers.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 . "${ROOT}/options.sh"
 
-# Make $KS_TOP available to YAML (for $KS_TOP/keys/... paths etc.)
+# Make $KS_TOP available and also use it to expand YAML later.
 export KS_TOP="${ROOT}"
 
 # ------------------------- arg parsing ----------------------------------------
@@ -72,9 +72,10 @@ BOOT_IMG="${OUT_DIR}/boot.vfat"
 BDEB_CFG_BASE="${OUT_DIR}/bdebstrap.base.yaml"
 DEV_DIR="${ROOT}/devices/${KS_DEVICE}"
 DEV_LAYERS="${DEV_DIR}/layers.yaml"
+EXP_LAYERS_DIR="${OUT_DIR}/expanded-layers"
 
-sudo rm -rf "${ROOTFS}" "${IMG_DIR}" "${TMP_DIR}" "${BOOT_IMG}" "${BDEB_CFG_BASE}" "${CFG_AUTO}" || true
-mkdir -p "${OUT_DIR}" "${IMG_DIR}" "${TMP_DIR}" "${ROOTFS}"
+sudo rm -rf "${ROOTFS}" "${IMG_DIR}" "${TMP_DIR}" "${BOOT_IMG}" "${BDEB_CFG_BASE}" "${CFG_AUTO}" "${EXP_LAYERS_DIR}" || true
+mkdir -p "${OUT_DIR}" "${IMG_DIR}" "${TMP_DIR}" "${ROOTFS}" "${EXP_LAYERS_DIR}"
 
 # mirror console to file; strip ANSI for the saved log if colors are on
 if $_color_on; then
@@ -102,6 +103,33 @@ if [[ -f "${DEV_LAYERS}" ]]; then
   for f in "${LAYER_CFGS[@]}"; do info "$f"; done
 else
   warn "No device layer file at ${DEV_LAYERS}; continuing with base config only."
+fi
+
+# ------------------------- expand $KS_TOP in layer YAMLs ----------------------
+expand_yaml() {
+  local in="$1" out="$2"
+  if command -v envsubst >/dev/null 2>&1; then
+    # Expand all ${VAR} / $VAR references with current env; safest.
+    envsubst < "$in" > "$out"
+  else
+    # Fallback: expand only $KS_TOP (common for keyring/source paths).
+    # Escape & in replacement to avoid sed backrefs.
+    local repl="${KS_TOP//&/\\&}"
+    sed "s|\\$KS_TOP|${repl}|g" "$in" > "$out"
+  fi
+}
+
+EXPANDED_LAYER_CFGS=()
+if [[ ${#LAYER_CFGS[@]} -gt 0 ]]; then
+  section "Expanding layer YAMLs"
+  for rel in "${LAYER_CFGS[@]}"; do
+    src="${ROOT}/${rel}"
+    [[ -f "$src" ]] || { error "Missing layer config: $rel"; exit 1; }
+    dst="${EXP_LAYERS_DIR}/$(basename "$rel")"
+    expand_yaml "$src" "$dst"
+    EXPANDED_LAYER_CFGS+=("$dst")
+    info "expanded: ${rel} -> ${dst}"
+  done
 fi
 
 # ------------------------- in-chroot apply script -----------------------------
@@ -165,7 +193,7 @@ touch /root/BUILD_OK
 EOSH
 chmod +x "${APPLY}"
 
-# ------------------------- base bdebstrap YAML (no APT files/keys here) ------
+# ------------------------- base bdebstrap YAML (no APT files/keys in script) --
 BDEB_CFG_BASE="${OUT_DIR}/bdebstrap.base.yaml"
 cat > "${BDEB_CFG_BASE}" <<EOF
 ---
@@ -210,11 +238,10 @@ section "bdebstrap (podman unshare)"
 
 cmd=(podman unshare bdebstrap)
 
-# Main config and optional layer configs
+# Main config and expanded layer configs
 cmd+=(--config "${BDEB_CFG_BASE}")
-for f in "${LAYER_CFGS[@]}"; do
-  [[ -f "${ROOT}/${f}" ]] || { error "Missing layer config: ${f}"; exit 1; }
-  cmd+=(-c "${ROOT}/${f}")
+for f in "${EXPANDED_LAYER_CFGS[@]}"; do
+  cmd+=(-c "${f}")
 done
 
 # Force directory target regardless of layer YAML
