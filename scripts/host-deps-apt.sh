@@ -19,6 +19,7 @@ sudo apt-get install -y \
   mtools \
   zstd \
   podman \
+  debian-archive-keyring \
   dbus-user-session
 
 # Enable qemu-aarch64 binfmt if available (for cross-building arm64 on x86_64)
