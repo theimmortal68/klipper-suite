@@ -16,8 +16,8 @@ def KS_RPI_REPO_COMPONENTS    "main"
 def KS_RPI_REPO_ARCH          "arm64"
 
 # Path to the key file in THIS repo and where to install it inside the target
-def KS_RPI_KEY_FILE           "keys/raspberrypi-archive-stable.gpg"
-def KS_RPI_KEY_DST            "/usr/share/keyrings/raspberrypi-archive-stable.gpg"
+def KS_RPI_KEY_FILE           "keys/raspberrypi-archive-keyring.gpg"
+def KS_RPI_KEY_DST            "/usr/share/keyrings/raspberrypi-archive-keyring.gpg"
 
 # Where to write the apt source entry inside the target
 def KS_RPI_APT_FILE           "/etc/apt/sources.list.d/raspi.list"

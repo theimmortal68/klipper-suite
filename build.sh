@@ -124,9 +124,9 @@ if [[ -d "${ROOT}/keys" ]]; then
   rsync -a "${ROOT}/keys/" "${KS_APT_KEYDIR}/"
 fi
 
-# Normalize Raspberry Pi key name if vendored as *-stable.gpg
-if [[ -f "${KS_APT_KEYDIR}/raspberrypi-archive-stable.gpg" && ! -f "${KS_APT_KEYDIR}/raspberrypi-archive-keyring.gpg" ]]; then
-  cp -f "${KS_APT_KEYDIR}/raspberrypi-archive-stable.gpg" \
+# Normalize Raspberry Pi key name if vendored as *-keyring.gpg
+if [[ -f "${KS_APT_KEYDIR}/raspberrypi-archive-keyring.gpg" && ! -f "${KS_APT_KEYDIR}/raspberrypi-archive-keyring.gpg" ]]; then
+  cp -f "${KS_APT_KEYDIR}/raspberrypi-archive-keyring.gpg" \
         "${KS_APT_KEYDIR}/raspberrypi-archive-keyring.gpg"
 fi
 

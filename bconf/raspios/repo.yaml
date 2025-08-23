@@ -6,14 +6,14 @@ mmdebstrap:
   setup-hooks:
     - mkdir -p $1/usr/share/keyrings
     # Use the actual filename you have in your repo. If your file is
-    # keys/raspberrypi-archive-stable.gpg, use that in the source path.
-    - copy-in ${KS_TOP}/keys/raspberrypi-archive-stable.gpg /usr/share/keyrings
+    # keys/raspberrypi-archive-keyring.gpg, use that in the source path.
+    - copy-in ${KS_TOP}/keys/raspberrypi-archive-keyring.gpg /usr/share/keyrings
     - ls -l $1/usr/share/keyrings
-    - chmod 0644 $1/usr/share/keyrings/raspberrypi-archive-stable.gpg
+    - chmod 0644 $1/usr/share/keyrings/raspberrypi-archive-keyring.gpg
 
   # RPi apt source (arm64), using the same key path as above.
   mirrors:
-    - deb [arch=arm64 signed-by=/usr/share/keyrings/raspberrypi-archive-stable.gpg] http://archive.raspberrypi.org/debian bookworm main
+    - deb [arch=arm64 signed-by=/usr/share/keyrings/raspberrypi-archive-keyring.gpg] http://archive.raspberrypi.org/debian bookworm main
 
   # After the repo is trusted, install the package-managed keyring so updates replace our copied file.
   packages:
