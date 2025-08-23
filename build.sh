@@ -1,81 +1,17 @@
 #!/bin/bash
-# ks-build: hard-fork driver (KS-only)
-# - KS_* repo paths
-# - KSconf_* configuration namespace
-# - SBOM removed; keep only *.img / *.img.zst
 
-set -euo pipefail
+set -uo pipefail
 
-# ---------------- KS repo layout ----------------
-KS_TOP="$(readlink -f "$(dirname "$0")")"
-KS_CONFIG_DIR="${KS_TOP}/config"
-KS_DEVICE_DIR="${KS_TOP}/device"
-KS_IMAGE_DIR="${KS_TOP}/image"
-KS_PROFILE_DIR="${KS_TOP}/profile"
-KS_META_DIR="${KS_TOP}/meta"
-KS_META_HOOKS_DIR="${KS_TOP}/meta-hooks"
-KS_TEMPLATES="${KS_TOP}/templates"
-KS_HELPERS="${KS_HELPERS:-${KS_TOP}/hooks}"   # allow env override
+IGTOP=$(readlink -f "$(dirname "$0")")
 
-# ---------------- Core helpers ------------------
-source "${KS_TOP}/scripts/dependencies_check"
-dependencies_check "${KS_TOP}/depends" || exit 1
-source "${KS_TOP}/scripts/common"
-source "${KS_TOP}/scripts/core"
-source "${KS_TOP}/bin/ksconf"   # KS config/option loader
+source "${IGTOP}/scripts/dependencies_check"
+dependencies_check "${IGTOP}/depends" || exit 1
+source "${IGTOP}/scripts/common"
+source "${IGTOP}/scripts/core"
+source "${IGTOP}/bin/igconf"
 
-# ---- build log snapshot (KS paths + KSconf_* vars; secrets redacted) ----
-log_snapshot() {
-  local when rev logdir lf
-  when="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-  rev="$(git -C "$KS_TOP" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-  logdir="${KSconf_sys_workdir:-$KS_TOP/work}/logs"
-  mkdir -p "$logdir"
-  lf="$logdir/build.env.$(date +%Y%m%d-%H%M%S).log"
 
-  is_secret_name() {
-    shopt -s nocasematch
-    case "$1" in
-      *password*|*pass*|*secret*|*token*|*apikey*|*privkey*|*private_key*|*cookie*|*auth*)
-        shopt -u nocasematch; return 0 ;;
-      *) shopt -u nocasematch; return 1 ;;
-    esac
-  }
-
-  {
-    echo "=== Build environment snapshot ==="
-    echo "time: $when"
-    echo "repo: $KS_TOP (rev $rev)"
-    echo
-
-    echo "[KS paths]"
-    for n in KS_TOP KS_CONFIG_DIR KS_DEVICE_DIR KS_IMAGE_DIR KS_PROFILE_DIR KS_META_DIR KS_META_HOOKS_DIR KS_TEMPLATES KS_HELPERS; do
-      printf "%-32s = %s\n" "$n" "${!n-}"
-    done
-    echo
-
-    echo "[KSconf_* variables]"
-    mapfile -t _vars < <(compgen -A variable | grep '^KSconf_' | sort -f)
-    for n in "${_vars[@]}"; do
-      v="${!n-}"
-      v="${v//$'\n'/\\n}"
-      if is_secret_name "$n"; then
-        printf "%-32s = %s\n" "$n" "***REDACTED***"
-      else
-        printf "%-32s = %s\n" "$n" "$v"
-      fi
-    done
-
-    if [[ "${KS_LOG_FULL_ENV:-n}" =~ ^(y|yes|1)$ ]]; then
-      echo; echo "[Full process env]  (WARNING: may contain secrets)"
-      env | sort
-    fi
-  } | tee -a "$lf"
-
-  msg "Wrote variable snapshot to $lf (secrets redacted)"
-}
-
-# ---------------- CLI ---------------------------
+# Defaults
 EXT_DIR=
 EXT_META=
 EXT_NS=
@@ -86,388 +22,420 @@ INCONFIG=generic64-apt-simple
 ONLY_ROOTFS=0
 ONLY_IMAGE=0
 
-usage() {
+
+usage()
+{
 cat <<-EOF >&2
 Usage
   $(basename "$0") [options]
 
+Root filesystem and image generation utility.
+
 Options:
-  [-c <config>]    Config name (under config/)
+  [-c <config>]    Name of config file, location defaults to config/
                    Default: $INCONFIG
-  [-D <directory>] External dir to override in-tree config/device/image/profile/meta
-  [-N <namespace>] Namespace subdir under -D for meta layers
-  [-o <file>]      Shell fragment with KEY=VALUE overrides
-  Developer
-  [-r]             Stop after rootfs (post-build)
-  [-i]             Skip rootfs, run hooks, generate image
+  [-D <directory>] Directory that takes precedence over the default in-tree
+                   hierarchy when searching for config files, profiles, meta
+                   layers and image layouts.
+  [-N <namespace>] Optional namespace to specify an additional sub-directory
+                   hierarchy within the directory provided by -D of where to
+                   search for meta layers.
+  [-o <file>]      Path to shell-style fragment specifying variables as
+                   key=value. These variables can override the defaults, those
+                   set by the config file, or provide completely new variables
+                   available to both rootfs and image generation stages.
+  Developer Options
+  [-r]             Establish configuration, build rootfs, exit after post-build.
+  [-i]             Establish configuration, skip rootfs, run hooks, generate image.
 EOF
 }
 
+
 while getopts "c:D:hiN:o:r" flag ; do
-  case "$flag" in
-    c) INCONFIG="$OPTARG" ;;
-    h) usage ; exit 0 ;;
-    D)
-      EXT_DIR="$(realpath -m "$OPTARG")"
-      [[ -d "$EXT_DIR" ]] || { usage ; die "Invalid external directory: $EXT_DIR" ; }
-      ;;
-    i) ONLY_IMAGE=1 ;;
-    N) EXT_NS="$OPTARG" ;;
-    o)
-      INOPTIONS="$(realpath -m "$OPTARG")"
-      [[ -f "$INOPTIONS" ]] || { usage ; die "Invalid options file: $INOPTIONS" ; }
-      ;;
-    r) ONLY_ROOTFS=1 ;;
-    ?|*) usage ; exit 1 ;;
-  esac
+   case "$flag" in
+      c)
+         INCONFIG="$OPTARG"
+         ;;
+      h)
+         usage ; exit 0
+         ;;
+      D)
+         EXT_DIR=$(realpath -m "$OPTARG")
+         [[ -d $EXT_DIR ]] || { usage ; die "Invalid external directory: $EXT_DIR" ; }
+         ;;
+      i)
+         ONLY_IMAGE=1
+         ;;
+      N)
+         EXT_NS="$OPTARG"
+         ;;
+      o)
+         INOPTIONS=$(realpath -m "$OPTARG")
+         [[ -f $INOPTIONS ]] || { usage ; die "Invalid options file: $INOPTIONS" ; }
+         ;;
+      r)
+         ONLY_ROOTFS=1
+         ;;
+      ?|*)
+         usage ; exit 1
+         ;;
+   esac
 done
 
-# External meta/namespace dirs (no failing realpath -e)
-if [[ -n "${EXT_DIR}" && -d "${EXT_DIR}/meta" ]]; then
-  EXT_META="${EXT_DIR}/meta"
-fi
-if [[ -n "${EXT_DIR}" && -n "${EXT_NS}" ]]; then
-  if [[ -d "${EXT_DIR}/${EXT_NS}" ]]; then
-    EXT_NSDIR="${EXT_DIR}/${EXT_NS}"
-  else
-    die "External namespace dir ${EXT_NS} does not exist in ${EXT_DIR}"
-  fi
-  if [[ -d "${EXT_DIR}/${EXT_NS}/meta" ]]; then
-    EXT_NSMETA="${EXT_DIR}/${EXT_NS}/meta"
-  fi
+
+[[ -d $EXT_DIR ]] && EXT_META=$(realpath -e "${EXT_DIR}/meta" 2>/dev/null)
+
+[[ -n $EXT_NS && ! -d $EXT_DIR ]] && die "External namespace supplied without external dir"
+
+if [[ -d $EXT_DIR && -n $EXT_NS ]] ; then
+   EXT_NSDIR=$(realpath -e "${EXT_DIR}/$EXT_NS" 2>/dev/null)
+   [[ -d $EXT_NSDIR ]] || die "External namespace dir $EXT_NS does not exist in $EXT_DIR"
+   EXT_NSMETA=$(realpath -e "${EXT_DIR}/$EXT_NS/meta" 2>/dev/null)
 fi
 
-# ---------------- Resolve config path -----------
+
+# Constants
+IGTOP_CONFIG="${IGTOP}/config"
+IGTOP_DEVICE="${IGTOP}/device"
+IGTOP_IMAGE="${IGTOP}/image"
+IGTOP_PROFILE="${IGTOP}/profile"
+IGTOP_SBOM="${IGTOP}/sbom"
+META="${IGTOP}/meta"
+META_HOOKS="${IGTOP}/meta-hooks"
+RPI_TEMPLATES="${IGTOP}/templates/rpi"
+
+
+# Establish the top level directory hierarchy by detecting the config file
 INCONFIG="${INCONFIG%.cfg}.cfg"
-
-# Prefer external override when provided, else fall back to in-tree.
-if [[ -n "$EXT_DIR" && -d "$EXT_DIR" && -f "$EXT_DIR/config/$INCONFIG" ]]; then
-  KS_CONFIG_DIR="$EXT_DIR/config"
-elif [[ -f "$KS_CONFIG_DIR/$INCONFIG" ]]; then
-  : # keep KS_CONFIG_DIR as-is
+if [[ -d ${EXT_DIR} ]] && \
+   [[ -f $(realpath -e ${EXT_DIR}/config/${INCONFIG} 2>/dev/null) ]] ; then
+   IGTOP_CONFIG="${EXT_DIR}/config"
 else
-  die "Can't resolve config file '$INCONFIG'. Tried: '$KS_CONFIG_DIR/$INCONFIG'${EXT_DIR:+ and '$EXT_DIR/config/$INCONFIG'}"
+   __IC=$(basename "$INCONFIG")
+   if realpath -e "${IGTOP_CONFIG}/${__IC}" > /dev/null 2>&1  ; then
+      INCONFIG="$__IC"
+   else
+      die "Can't resolve config file path for '${INCONFIG}'. Need -D?"
+   fi
 fi
+CFG=$(realpath -e "${IGTOP_CONFIG}/${INCONFIG}" 2>/dev/null) || \
+   die "Bad config spec: $IGTOP_CONFIG : $INCONFIG"
 
-# Resolved config path (no subshell; bash -e friendly)
-CFG="$KS_CONFIG_DIR/$INCONFIG"
 
-[[ -n "${EXT_META:-}" ]]   && msg "External meta at $EXT_META"
-[[ -n "${EXT_NSMETA:-}" ]] && msg "External [$EXT_NS] meta at $EXT_NSMETA"
+[[ -d $EXT_META ]] && msg "External meta at $EXT_META"
+[[ -d $EXT_NSMETA ]] && msg "External [$EXT_NS] meta at $EXT_NSMETA"
 
-# Pass-thru for downstream layers
-[[ -n "${EXT_DIR:-}"   ]] && KSconf_ext_dir="$EXT_DIR"
-[[ -n "${EXT_NSDIR:-}" ]] && KSconf_ext_nsdir="$EXT_NSDIR"
 
-msg "Reading $CFG with options [${INOPTIONS:-}]"
+# Set via cmdline only
+[[ -d $EXT_DIR ]] && IGconf_ext_dir="$EXT_DIR"
+[[ -d $EXT_NSDIR ]] && IGconf_ext_nsdir="$EXT_NSDIR"
 
-# User options first, then config/defaults, then options again
-[[ -s "${INOPTIONS:-}" ]] && apply_options "$INOPTIONS"
+
+msg "Reading $CFG with options [$INOPTIONS]"
+
+# Load options(1) to perform explicit set/unset
+[[ -s "$INOPTIONS" ]] && apply_options "$INOPTIONS"
+
+
+# Merge config
 aggregate_config "$CFG"
 
-# --- Compatibility for older keys/env (remove after migration) ---
-# device.user1 -> device.user
-if ksconf_isset device_user1 && ksconf_isnset device_user; then
-  KSconf_device_user="$KSconf_device_user1"
-fi
-# device.userpass / device.user1pass -> device.password
-if ksconf_isset device_userpass && ksconf_isnset device_password; then
-  KSconf_device_password="$KSconf_device_userpass"
-fi
-if ksconf_isset device_user1pass && ksconf_isnset device_password; then
-  KSconf_device_password="$KSconf_device_user1pass"
-fi
-# device.ssh_user1 / device.ssh_user -> device.ssh
-if ksconf_isset device_ssh_user1 && ksconf_isnset device_ssh; then
-  KSconf_device_ssh="$KSconf_device_ssh_user1"
-fi
-if ksconf_isset device_ssh_user && ksconf_isnset device_ssh; then
-  KSconf_device_ssh="$KSconf_device_ssh_user"
-fi
-# meta.ssh_pubkey_user1 -> meta.ssh_pubkey
-if ksconf_isset meta_ssh_pubkey_user1 && ksconf_isnset meta_ssh_pubkey; then
-  KSconf_meta_ssh_pubkey="$KSconf_meta_ssh_pubkey_user1"
-fi
-# Legacy DIST_NAME -> sys_dist_name
-if [[ -n "${DIST_NAME:-}" ]] && ksconf_isnset sys_dist_name; then
-  KSconf_sys_dist_name="$DIST_NAME"
-fi
-# Legacy env → sys.* keys (if not set via options/defaults)
-if [[ -n "${DEBIAN_FRONTEND:-}" ]] && ksconf_isnset sys_debian_frontend; then
-  KSconf_sys_debian_frontend="$DEBIAN_FRONTEND"
-fi
-if [[ -n "${APT_LISTCHANGES_FRONTEND:-}" ]] && ksconf_isnset sys_apt_listchanges_frontend; then
-  KSconf_sys_apt_listchanges_frontend="$APT_LISTCHANGES_FRONTEND"
-fi
-if [[ -n "${NEEDRESTART_MODE:-}" ]] && ksconf_isnset sys_needrestart_mode; then
-  KSconf_sys_needrestart_mode="$NEEDRESTART_MODE"
-fi
-if [[ -n "${DEBCONF_NONINTERACTIVE_SEEN:-}" ]] && ksconf_isnset sys_debconf_noninteractive_seen; then
-  KSconf_sys_debconf_noninteractive_seen="$DEBCONF_NONINTERACTIVE_SEEN"
-fi
 
-# Emit an env snapshot to logs (secrets redacted)
-log_snapshot
+# Mandatory for subsequent parsing
+[[ -z ${IGconf_image_layout+x} ]] && die "No image layout provided"
+[[ -z ${IGconf_device_class+x} ]] && die "No device class provided"
+[[ -z ${IGconf_device_profile+x} ]] && die "No device profile provided"
 
-# Required config keys
-[[ -z ${KSconf_image_layout+x}  ]] && die "No image layout provided"
-[[ -z ${KSconf_device_class+x}  ]] && die "No device class provided"
-[[ -z ${KSconf_device_profile+x}]] && die "No device profile provided"
 
-# ---------------- Resolve device/image/profile roots -----------
-if [[ -n "$EXT_DIR" && -d "${EXT_DIR}/device/$KSconf_device_class" ]]; then
-  KS_DEVICE="${EXT_DIR}/device/$KSconf_device_class"
-else
-  KS_DEVICE="${KS_DEVICE_DIR}/$KSconf_device_class"
-fi
+# Internalise hierarchy paths, prioritising the external sub-directory tree
+[[ -d $EXT_DIR ]] && IGDEVICE=$(realpath -e "${EXT_DIR}/device/$IGconf_device_class" 2>/dev/null)
+: ${IGDEVICE:=${IGTOP_DEVICE}/$IGconf_device_class}
 
-if [[ -n "$EXT_DIR" && -d "${EXT_DIR}/image/$KSconf_image_layout" ]]; then
-  KS_IMAGE="${EXT_DIR}/image/$KSconf_image_layout"
-else
-  KS_IMAGE="${KS_IMAGE_DIR}/$KSconf_image_layout"
-fi
+[[ -d $EXT_DIR ]] && IGIMAGE=$(realpath -e "${EXT_DIR}/image/$IGconf_image_layout" 2>/dev/null)
+: ${IGIMAGE:=${IGTOP_IMAGE}/$IGconf_image_layout}
 
-if [[ -n "$EXT_DIR" && -d "${EXT_DIR}/profile/$KSconf_device_profile" ]]; then
-  KS_PROFILE="${EXT_DIR}/profile/$KSconf_device_profile"
-else
-  KS_PROFILE="${KS_PROFILE_DIR}/$KSconf_device_profile"
-fi
+[[ -d $EXT_DIR ]] && IGPROFILE=$(realpath -e "${EXT_DIR}/profile/$IGconf_device_profile" 2>/dev/null)
+: ${IGPROFILE:=${IGTOP_PROFILE}/$IGconf_device_profile}
 
-for i in KS_DEVICE KS_IMAGE KS_PROFILE ; do
-  msg "$i ${!i}"
-  realpath -e "${!i}" > /dev/null 2>&1 || die "$i is invalid"
+
+# Final path validation
+for i in IGDEVICE IGIMAGE IGPROFILE ; do
+   msg "$i ${!i}"
+   realpath -e ${!i} > /dev/null 2>&1 || die "$i is invalid"
 done
 
-# ---------------- Merge per-target options/defaults -----------
-[[ -s ${KS_DEVICE}/config.options     ]] && aggregate_options "device"   "${KS_DEVICE}/config.options"
-[[ -s ${KS_IMAGE}/config.options      ]] && aggregate_options "image"    "${KS_IMAGE}/config.options"
 
-[[ -s ${KS_DEVICE}/build.defaults     ]] && aggregate_options "device"   "${KS_DEVICE}/build.defaults"
-[[ -s ${KS_IMAGE}/build.defaults      ]] && aggregate_options "image"    "${KS_IMAGE}/build.defaults"
-[[ -s ${KS_IMAGE}/provision.defaults  ]] && aggregate_options "image"    "${KS_IMAGE}/provision.defaults"
+# Merge config options for selected device and image
+[[ -s ${IGDEVICE}/config.options ]] && aggregate_options "device" ${IGDEVICE}/config.options
+[[ -s ${IGIMAGE}/config.options ]] && aggregate_options "image" ${IGIMAGE}/config.options
 
-# Global defaults
-aggregate_options "device" "${KS_DEVICE_DIR}/build.defaults"
-aggregate_options "image"  "${KS_IMAGE_DIR}/build.defaults"
-aggregate_options "image"  "${KS_IMAGE_DIR}/provision.defaults"
-aggregate_options "sys"    "${KS_TOP}/sys-build.defaults"
-aggregate_options "meta"   "${KS_META_DIR}/defaults"
 
-# Final user overrides
-[[ -s "${INOPTIONS:-}" ]] && apply_options "$INOPTIONS"
+# Merge defaults for selected device and image
+[[ -s ${IGDEVICE}/build.defaults ]] && aggregate_options "device" ${IGDEVICE}/build.defaults
+[[ -s ${IGIMAGE}/build.defaults ]] && aggregate_options "image" ${IGIMAGE}/build.defaults
+[[ -s ${IGIMAGE}/provision.defaults ]] && aggregate_options "image" ${IGIMAGE}/provision.defaults
 
-# ---------------- APT keydir -------------------
-if ksconf_isnset sys_apt_keydir ; then
-  KSconf_sys_apt_keydir="${KSconf_sys_workdir}/keys"
-  mkdir -p "$KSconf_sys_apt_keydir"
-  [[ -d /usr/share/keyrings ]] && rsync -a /usr/share/keyrings/ "$KSconf_sys_apt_keydir"
-  [[ -d "$USER/.local/share/keyrings" ]] && rsync -a "$USER/.local/share/keyrings/" "$KSconf_sys_apt_keydir"
-  rsync -a "${KS_TOP}/keydir/" "$KSconf_sys_apt_keydir"
+
+# Merge remaining defaults
+aggregate_options "device" ${IGTOP_DEVICE}/build.defaults
+aggregate_options "image" ${IGTOP_IMAGE}/build.defaults
+aggregate_options "image" ${IGTOP_IMAGE}/provision.defaults
+aggregate_options "sys" ${IGTOP}/sys-build.defaults
+aggregate_options "sbom" ${IGTOP_SBOM}/defaults
+aggregate_options "meta" ${META}/defaults
+
+
+# Load options(2) for final overrides
+[[ -s "$INOPTIONS" ]] && apply_options "$INOPTIONS"
+
+
+# Assemble APT keys
+if igconf_isnset sys_apt_keydir ; then
+   IGconf_sys_apt_keydir="${IGconf_sys_workdir}/keys"
+   mkdir -p "$IGconf_sys_apt_keydir"
+   [[ -d /usr/share/keyrings ]] && rsync -a /usr/share/keyrings/ $IGconf_sys_apt_keydir
+   [[ -d "$USER/.local/share/keyrings" ]] && rsync -a "$USER/.local/share/keyrings/" $IGconf_sys_apt_keydir
+   rsync -a "$IGTOP/keydir/" $IGconf_sys_apt_keydir
 fi
-[[ -d $KSconf_sys_apt_keydir ]] || die "apt keydir $KSconf_sys_apt_keydir is invalid"
+[[ -d $IGconf_sys_apt_keydir ]] || die "apt keydir $IGconf_sys_apt_keydir is invalid"
 
-# ---------------- Build env (export KSconf_*) --------------
+
+# Assemble environment for rootfs and image creation, propagating IG variables
+# to rootfs and post-build stages as appropriate.
 ENV_ROOTFS=()
 ENV_POST_BUILD=()
+for v in $(compgen -A variable -X '!IGconf*') ; do
+   case $v in
+      IGconf_device_timezone)
+         ENV_ROOTFS+=('--env' ${v}="${!v}")
+         ENV_POST_BUILD+=(${v}="${!v}")
+         ENV_ROOTFS+=('--env' IGconf_device_timezone_area="${!v%%/*}")
+         ENV_ROOTFS+=('--env' IGconf_device_timezone_city="${!v##*/}")
+         ENV_POST_BUILD+=(IGconf_device_timezone_area="${!v%%/*}")
+         ENV_POST_BUILD+=(IGconf_device_timezone_city="${!v##*/}")
+         ;;
+      IGconf_sys_apt_proxy_http)
+         err=$(curl --head --silent --write-out "%{http_code}" --output /dev/null "${!v}")
+         [[ $? -ne 0 ]] && die "unreachable proxy: ${!v}"
+         msg "$err ${!v}"
+         ENV_ROOTFS+=('--aptopt' "Acquire::http { Proxy \"${!v}\"; }")
+         ENV_ROOTFS+=('--env' ${v}="${!v}")
+         ;;
+      IGconf_sys_apt_keydir)
+         ENV_ROOTFS+=('--aptopt' "Dir::Etc::TrustedParts ${!v}")
+         ENV_ROOTFS+=('--env' ${v}="${!v}")
+         ;;
+      IGconf_sys_apt_get_purge)
+         if igconf_isy $v ; then ENV_ROOTFS+=('--aptopt' "APT::Get::Purge true") ; fi
+         ;;
+      IGconf_ext_dir|IGconf_ext_nsdir )
+         ENV_ROOTFS+=('--env' ${v}="${!v}")
+         ENV_POST_BUILD+=(${v}="${!v}")
+         if [ -d "${!v}/bin" ] ; then
+            PATH="${!v}/bin:${PATH}"
+            ENV_ROOTFS+=('--env' PATH="$PATH")
+            ENV_POST_BUILD+=(PATH="${PATH}")
+         fi
+         ;;
 
-for v in $(compgen -A variable -X '!KSconf*') ; do
-  case $v in
-    KSconf_device_timezone)
-      ENV_ROOTFS+=('--env' ${v}="${!v}")
-      ENV_POST_BUILD+=(${v}="${!v}")
-      ENV_ROOTFS+=('--env' KSconf_device_timezone_area="${!v%%/*}")
-      ENV_ROOTFS+=('--env' KSconf_device_timezone_city="${!v##*/}")
-      ENV_POST_BUILD+=(KSconf_device_timezone_area="${!v%%/*}")
-      ENV_POST_BUILD+=(KSconf_device_timezone_city="${!v##*/}")
-      ;;
-    KSconf_sys_apt_proxy_http)
-      err=$(curl --head --silent --write-out "%{http_code}" --output /dev/null "${!v}") || true
-      [[ "${err:-000}" = "200" || "${err:-}" = "407" || "${err:-}" = "302" ]] || die "unreachable proxy: ${!v}"
-      msg "$err ${!v}"
-      ENV_ROOTFS+=('--aptopt' "Acquire::http { Proxy \"${!v}\"; }")
-      ENV_ROOTFS+=('--env' ${v}="${!v}")
-      ;;
-    KSconf_sys_apt_keydir)
-      ENV_ROOTFS+=('--aptopt' "Dir::Etc::TrustedParts ${!v}")
-      ENV_ROOTFS+=('--env' ${v}="${!v}")
-      ;;
-    KSconf_sys_apt_get_purge)
-      if ksconf_isy $v ; then ENV_ROOTFS+=('--aptopt' "APT::Get::Purge true") ; fi
-      ;;
-    # Map sys.* convenience keys to standard envs inside the build/chroot
-    KSconf_sys_debian_frontend)
-      ENV_ROOTFS+=('--env' DEBIAN_FRONTEND="${!v}")
-      ENV_POST_BUILD+=(DEBIAN_FRONTEND="${!v}")
-      ;;
-    KSconf_sys_apt_listchanges_frontend)
-      ENV_ROOTFS+=('--env' APT_LISTCHANGES_FRONTEND="${!v}")
-      ENV_POST_BUILD+=(APT_LISTCHANGES_FRONTEND="${!v}")
-      ;;
-    KSconf_sys_needrestart_mode)
-      ENV_ROOTFS+=('--env' NEEDRESTART_MODE="${!v}")
-      ENV_POST_BUILD+=(NEEDRESTART_MODE="${!v}")
-      ;;
-    KSconf_sys_debconf_noninteractive_seen)
-      ENV_ROOTFS+=('--env' DEBCONF_NONINTERACTIVE_SEEN="${!v}")
-      ENV_POST_BUILD+=(DEBCONF_NONINTERACTIVE_SEEN="${!v}")
-      ;;
-    KSconf_ext_dir|KSconf_ext_nsdir)
-      ENV_ROOTFS+=('--env' ${v}="${!v}")
-      ENV_POST_BUILD+=(${v}="${!v}")
-      if [ -d "${!v}/bin" ] ; then
-        PATH="${!v}/bin:${PATH}"
-        ENV_ROOTFS+=('--env' PATH="$PATH")
-        ENV_POST_BUILD+=(PATH="${PATH}")
-      fi
-      ;;
-    *)
-      ENV_ROOTFS+=('--env' ${v}="${!v}")
-      ENV_POST_BUILD+=(${v}="${!v}")
-      ;;
-  esac
+      *)
+         ENV_ROOTFS+=('--env' ${v}="${!v}")
+         ENV_POST_BUILD+=(${v}="${!v}")
+         ;;
+   esac
+done
+ENV_ROOTFS+=('--env' IGTOP=$IGTOP)
+ENV_ROOTFS+=('--env' META_HOOKS=$META_HOOKS)
+ENV_ROOTFS+=('--env' RPI_TEMPLATES=$RPI_TEMPLATES)
+
+for i in IGDEVICE IGIMAGE IGPROFILE ; do
+   ENV_ROOTFS+=('--env' ${i}="${!i}")
+   ENV_POST_BUILD+=(${i}="${!i}")
 done
 
-# Expose KS repo paths to layers
-ENV_ROOTFS+=('--env' KS_TOP="${KS_TOP}")
-ENV_ROOTFS+=('--env' KS_META_HOOKS_DIR="${KS_META_HOOKS_DIR}")
-ENV_ROOTFS+=('--env' KS_TEMPLATES="${KS_TEMPLATES}")
-ENV_ROOTFS+=('--env' KS_HELPERS="${KS_HELPERS}")
 
-for i in KS_DEVICE KS_IMAGE KS_PROFILE ; do
-  ENV_ROOTFS+=('--env' ${i}="${!i}")
-  ENV_POST_BUILD+=(${i}="${!i}")
-done
+# Final PATH setup
+ENV_ROOTFS+=('--env' PATH="${IGTOP}/bin:$PATH")
+mkdir -p ${IGconf_sys_workdir}/host/bin
+ENV_POST_BUILD+=(PATH="${IGTOP}/bin:${IGconf_sys_workdir}/host/bin:${PATH}")
 
-ENV_ROOTFS+=('--env' PATH="${KS_TOP}/bin:$PATH")
-mkdir -p "${KSconf_sys_workdir}/host/bin"
-ENV_POST_BUILD+=(PATH="${KS_TOP}/bin:${KSconf_sys_workdir}/host/bin:${PATH}")
 
-# ---------------- Layer selection ----------------
-layer_push() {
-  msg "Load layer [$1] $2"
-  case "$1" in
-    image)
-      if [[ -s "${KS_IMAGE}/meta/$2.yaml" ]] ; then
-        [[ -f "${KS_IMAGE}/meta/$2.defaults" ]] && aggregate_options "meta" "${KS_IMAGE}/meta/$2.defaults"
-        ARGS_LAYERS+=('--config' "${KS_IMAGE}/meta/$2.yaml")
-        return
-      fi
-      ;& # fallthrough to main
-    main|auto)
-      if [[ -n "${EXT_NSMETA:-}" && -s "${EXT_NSMETA}/$2.yaml" ]] ; then
-        [[ -f "${EXT_NSMETA}/$2.defaults" ]] && aggregate_options "meta" "${EXT_NSMETA}/$2.defaults"
-        ARGS_LAYERS+=('--config' "${EXT_NSMETA}/$2.yaml")
-      elif [[ -n "${EXT_META:-}" && -s "${EXT_META}/$2.yaml" ]] ; then
-        [[ -f "${EXT_META}/$2.defaults" ]] && aggregate_options "meta" "${EXT_META}/$2.defaults"
-        ARGS_LAYERS+=('--config' "${EXT_META}/$2.yaml")
-      elif [[ -s "${KS_META_DIR}/$2.yaml" ]] ; then
-        [[ -f "${KS_META_DIR}/$2.defaults" ]] && aggregate_options "meta" "${KS_META_DIR}/$2.defaults"
-        ARGS_LAYERS+=('--config' "${KS_META_DIR}/$2.yaml")
-      else
-        die "Invalid meta layer: $2"
-      fi
-      ;;
-    *) die "Invalid layer scope" ;;
-  esac
+# Load layer default settings and append layer to list
+layer_push()
+{
+   msg "Load layer [$1] $2"
+   case "$1" in
+      image)
+         if [[ -s "${IGIMAGE}/meta/$2.yaml" ]] ; then
+            [[ -f "${IGIMAGE}/meta/$2.defaults" ]] && \
+               aggregate_options "meta" "${IGIMAGE}/meta/$2.defaults"
+            ARGS_LAYERS+=('--config' "${IGIMAGE}/meta/$2.yaml")
+            return
+         fi
+         ;& # image layer can pull in core layers, but not vice versa
+
+      main|auto)
+         if [[ -n $EXT_NSMETA && -s "${EXT_NSMETA}/$2.yaml" ]] ; then
+            [[ -f "${EXT_NSMETA}/$2.defaults" ]] && \
+               aggregate_options "meta" "${EXT_NSMETA}/$2.defaults"
+            ARGS_LAYERS+=('--config' "${EXT_NSMETA}/$2.yaml")
+
+         elif [[ -n $EXT_META && -s "${EXT_META}/$2.yaml" ]] ; then
+            [[ -f "${EXT_META}/$2.defaults" ]] && \
+               aggregate_options "meta" "${EXT_META}/$2.defaults"
+            ARGS_LAYERS+=('--config' "${EXT_META}/$2.yaml")
+
+         elif [[ -s "${META}/$2.yaml" ]] ; then
+            [[ -f "${META}/$2.defaults" ]] && \
+               aggregate_options "meta" "${META}/$2.defaults"
+            ARGS_LAYERS+=('--config' "${META}/$2.yaml")
+         else
+            die "Invalid meta layer specifier: $2 (not found)"
+         fi
+         ;;
+      *)
+         die "Invalid layer scope" ;;
+   esac
 }
+
 
 ARGS_LAYERS=()
-load_profile() {  # scope, file
-  [[ $# -eq 2 ]] || die "Load profile bad nargs"
-  msg "Load profile $2"
-  [[ -f $2 ]] || die "Invalid profile: $2"
-  while read -r line; do
-    [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
-    layer_push "$1" "$line"
-  done < "$2"
+load_profile() {
+   [[ $# -eq 2 ]] || die "Load profile bad nargs"
+   msg "Load profile $2"
+   [[ -f $2 ]] || die "Invalid profile: $2"
+   while read -r line; do
+      [[ "$line" =~ ^#.*$ ]] && continue
+      [[ "$line" =~ ^$ ]] && continue
+      layer_push "$1" "$line"
+   done < "$2"
 }
 
-load_profile main   "$KS_PROFILE"
-if ksconf_isset image_profile ; then load_profile image "${KS_IMAGE}/profile/${KSconf_image_profile}"; fi
-if ksconf_isy device_ssh ; then layer_push auto net-apps/openssh-server; fi
-layer_push auto sys-apps/finalize-upgrade
 
-# ---------------- Hook runner -------------------
-runh() {
-  local hookdir; hookdir="$(dirname "$1")"
-  local hook;    hook="$(basename "$1")"
-  shift 1
-  msg "$hookdir"["$hook"] "$@"
-  env -C "$hookdir" "${ENV_POST_BUILD[@]}" podman unshare "./$hook" "$@"
-  local ret=$?
-  [[ $ret -eq 0 ]] || die "Hook Error: [$hookdir/$hook] ($ret)"
+# Assemble meta layers from main profile
+load_profile main "$IGPROFILE"
+
+
+# Add layers from image profile
+if igconf_isset image_profile ; then
+   load_profile image "${IGIMAGE}/profile/${IGconf_image_profile}"
+fi
+
+
+# Auto-selected layers
+if igconf_isy device_ssh_user1 ; then
+   layer_push auto net-misc/openssh-server
+fi
+
+
+# hook execution
+runh()
+{
+   local hookdir=$(dirname "$1")
+   local hook=$(basename "$1")
+   shift 1
+   msg "$hookdir"["$hook"] "$@"
+   env -C $hookdir "${ENV_POST_BUILD[@]}" podman unshare ./"$hook" "$@"
+   ret=$?
+   if [[ $ret -ne 0 ]]
+   then
+      die "Hook Error: ["$hookdir"/"$hook"] ($ret)"
+   fi
 }
 
-# pre-build hooks
-runh "${KS_DEVICE_DIR}/pre-build.sh"
-runh "${KS_IMAGE_DIR}/pre-build.sh"
-[[ -x ${KS_IMAGE}/pre-build.sh  ]] && runh "${KS_IMAGE}/pre-build.sh"
-[[ -x ${KS_DEVICE}/pre-build.sh ]] && runh "${KS_DEVICE}/pre-build.sh"
 
-# ---------------- Rootfs (bdebstrap) ------------
-[[ $ONLY_IMAGE = 1 ]] && true || rund "$KS_TOP" podman unshare bdebstrap \
-  "${ARGS_LAYERS[@]}" \
-  "${ENV_ROOTFS[@]}" \
-  --force --verbose --debug \
-  --name "$KSconf_image_name" \
-  --hostname "$KSconf_device_hostname" \
-  --output "$KSconf_sys_outputdir" \
-  --target "$KSconf_sys_target"  \
-  --setup-hook 'bin/runner setup "$@"' \
-  --essential-hook 'bin/runner essential "$@"' \
-  --customize-hook 'bin/runner customize "$@"' \
-  --cleanup-hook 'bin/runner cleanup "$@"'
+# pre-build: hooks - common
+runh ${IGTOP_DEVICE}/pre-build.sh
+runh ${IGTOP_IMAGE}/pre-build.sh
 
-[[ -f "$KSconf_sys_target" ]] && { msg "Exiting: non-directory target complete"; exit 0; }
 
-# ---------------- Overlays ----------------------
-if [ -d "${KS_IMAGE}/device/rootfs-overlay" ] ; then
-  run podman unshare rsync -a "${KS_IMAGE}/device/rootfs-overlay/" "${KSconf_sys_target}"
+# pre-build: hooks - image layout then device
+if [ -x ${IGIMAGE}/pre-build.sh ] ; then
+   runh ${IGIMAGE}/pre-build.sh
 fi
-if [ -d "${KS_DEVICE}/device/rootfs-overlay" ] ; then
-  run podman unshare rsync -a "${KS_DEVICE}/device/rootfs-overlay/" "${KSconf_sys_target}"
+if [ -x ${IGDEVICE}/pre-build.sh ] ; then
+   runh ${IGDEVICE}/pre-build.sh
 fi
 
-# ---------------- post-build hooks --------------
-[[ -x ${KS_IMAGE}/post-build.sh  ]] && runh "${KS_IMAGE}/post-build.sh"  "${KSconf_sys_target}"
-[[ -x ${KS_DEVICE}/post-build.sh ]] && runh "${KS_DEVICE}/post-build.sh" "${KSconf_sys_target}"
+
+# Generate rootfs
+[[ $ONLY_IMAGE = 1 ]] && true || rund "$IGTOP" podman unshare bdebstrap \
+   "${ARGS_LAYERS[@]}" \
+   "${ENV_ROOTFS[@]}" \
+   --force \
+   --name "$IGconf_image_name" \
+   --hostname "$IGconf_device_hostname" \
+   --output "$IGconf_sys_outputdir" \
+   --target "$IGconf_sys_target"  \
+   --setup-hook 'bin/runner setup "$@"' \
+   --essential-hook 'bin/runner essential "$@"' \
+   --customize-hook 'bin/runner customize "$@"' \
+   --cleanup-hook 'bin/runner cleanup "$@"'
+
+
+[[ -f "$IGconf_sys_target" ]] && { msg "Exiting as non-directory target complete" ; exit 0 ; }
+
+
+# post-build: apply rootfs overlays - image layout then device
+if [ -d ${IGIMAGE}/device/rootfs-overlay ] ; then
+   run podman unshare rsync -a ${IGIMAGE}/device/rootfs-overlay/ ${IGconf_sys_target}
+fi
+if [ -d ${IGDEVICE}/device/rootfs-overlay ] ; then
+   run podman unshare rsync -a ${IGDEVICE}/device/rootfs-overlay/ ${IGconf_sys_target}
+fi
+
+
+# post-build: hooks - image layout then device
+if [ -x ${IGIMAGE}/post-build.sh ] ; then
+   runh ${IGIMAGE}/post-build.sh ${IGconf_sys_target}
+fi
+if [ -x ${IGDEVICE}/post-build.sh ] ; then
+   runh ${IGDEVICE}/post-build.sh ${IGconf_sys_target}
+fi
+
 
 [[ $ONLY_ROOTFS = 1 ]] && exit $?
 
-# ---------------- pre-image hook ----------------
-if [ -x "${KS_DEVICE}/pre-image.sh" ] ; then
-  runh "${KS_DEVICE}/pre-image.sh" "${KSconf_sys_target}" "${KSconf_sys_outputdir}"
-elif [ -x "${KS_IMAGE}/pre-image.sh" ] ; then
-  runh "${KS_IMAGE}/pre-image.sh" "${KSconf_sys_target}" "${KSconf_sys_outputdir}"
+
+# pre-image: hooks - device has priority over image layout
+if [ -x ${IGDEVICE}/pre-image.sh ] ; then
+   runh ${IGDEVICE}/pre-image.sh ${IGconf_sys_target} ${IGconf_sys_outputdir}
+elif [ -x ${IGIMAGE}/pre-image.sh ] ; then
+   runh ${IGIMAGE}/pre-image.sh ${IGconf_sys_target} ${IGconf_sys_outputdir}
 else
-  die "no pre-image hook"
+   die "no pre-image hook"
 fi
 
-# ---------------- Image generation --------------
-GTMP="$(mktemp -d)"; trap 'rm -rf "$GTMP"' EXIT
-mkdir -p "$KSconf_sys_deploydir"
 
-for f in "${KSconf_sys_outputdir}"/genimage*.cfg; do
-  [[ -f "$f" ]] || continue
-  run podman unshare env "${ENV_POST_BUILD[@]}" genimage \
-    --rootpath "${KSconf_sys_target}" \
-    --tmppath "$GTMP" \
-    --inputpath "${KSconf_sys_outputdir}" \
-    --outputpath "${KSconf_sys_outputdir}" \
-    --loglevel=1 \
-    --config "$f" | pv -t -F 'Generating image...%t' || die "genimage error"
+# SBOM
+if [ -x ${IGTOP_SBOM}/gen.sh ] ; then
+   runh ${IGTOP_SBOM}/gen.sh ${IGconf_sys_target} ${IGconf_sys_outputdir}
+fi
+
+
+GTMP=$(mktemp -d)
+trap 'rm -rf $GTMP' EXIT
+mkdir -p "$IGconf_sys_deploydir"
+
+
+# Generate image(s)
+for f in "${IGconf_sys_outputdir}"/genimage*.cfg; do
+   [[ -f "$f" ]] || continue
+   run podman unshare env "${ENV_POST_BUILD[@]}" genimage \
+      --rootpath ${IGconf_sys_target} \
+      --tmppath $GTMP \
+      --inputpath ${IGconf_sys_outputdir}   \
+      --outputpath ${IGconf_sys_outputdir} \
+      --loglevel=1 \
+      --config $f | pv -t -F 'Generating image...%t' || die "genimage error"
 done
 
-# ---------------- post-image hooks --------------
-if [ -x "${KS_DEVICE}/post-image.sh" ] ; then
-  runh "${KS_DEVICE}/post-image.sh" "$KSconf_sys_deploydir"
-elif [ -x "${KS_IMAGE}/post-image.sh" ] ; then
-  runh "${KS_IMAGE}/post-image.sh" "$KSconf_sys_deploydir"
-else
-  runh "${KS_IMAGE_DIR}/post-image.sh" "$KSconf_sys_deploydir"
-fi
 
-# Keep only images
-if [ -d "$KSconf_sys_deploydir" ]; then
-  find "$KSconf_sys_deploydir" -type f ! -name '*.img' ! -name '*.img.zst' -delete || true
+# post-image: hooks - device has priority over image layout
+if [ -x ${IGDEVICE}/post-image.sh ] ; then
+   runh ${IGDEVICE}/post-image.sh $IGconf_sys_deploydir
+elif [ -x ${IGIMAGE}/post-image.sh ] ; then
+   runh ${IGIMAGE}/post-image.sh $IGconf_sys_deploydir
+else
+   runh ${IGTOP_IMAGE}/post-image.sh $IGconf_sys_deploydir
 fi

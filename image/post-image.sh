@@ -2,6 +2,7 @@
 
 set -eu
 
+
 deploydir=$1
 
 case ${IGconf_image_compression} in
@@ -11,6 +12,7 @@ case ${IGconf_image_compression} in
       die "Deploy error. Unsupported compression."
       ;;
 esac
+
 
 if [ -f ${IGconf_sys_outputdir}/genimage.cfg ] ; then
    fstabs=()
@@ -28,19 +30,21 @@ if [ -f ${IGconf_sys_outputdir}/genimage.cfg ] ; then
    image2json -g ${IGconf_sys_outputdir}/genimage.cfg "${opts[@]}" > ${IGconf_sys_outputdir}/image.json
 fi
 
+
 files=()
 
 for f in "${IGconf_sys_outputdir}/${IGconf_image_name}"*.${IGconf_image_suffix} ; do
    files+=($f)
    [[ -f "$f" ]] || continue
-
+   
    # Ensure that the output image is a multiple of the selected sector size
    truncate -s %${IGconf_device_sector_size} $f
 done
 
 files+=("${IGconf_sys_outputdir}/${IGconf_image_name}"*.${IGconf_image_suffix}.sparse)
+files+=("${IGconf_sys_outputdir}/${IGconf_image_name}"*.sbom)
 
-msg "Deploying image"
+msg "Deploying image and SBOM"
 
 for f in "${files[@]}" ; do
    [[ -f "$f" ]] || continue
