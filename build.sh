@@ -247,6 +247,10 @@ cmd+=(--output "${OUT_DIR}")
 cmd+=(--target "${ROOTFS}")
 cmd+=(--format dir)
 
+# Ensure target directories exist early in setup stage
+cmd+=(--setup-hook 'mkdir -p "$1/usr/share/keyrings"')
+cmd+=(--setup-hook 'mkdir -p "$1/etc/apt/sources.list.d"')
+
 # Preseed Debian archive key inside target
 if [[ "${KS_ENABLE_DEBIAN_KEY}" == "1" ]]; then
   cmd+=(--setup-hook "copy-in ${ROOT}/${KS_DEBIAN_KEY_FILE} ${KS_DEBIAN_KEY_DST}")
