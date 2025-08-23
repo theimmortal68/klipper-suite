@@ -17,7 +17,7 @@ EXT_META=
 EXT_NS=
 EXT_NSDIR=
 EXT_NSMETA=
-INCONFIG=config/generic64-test
+INCONFIG=generic64-apt-simple
 INOPTIONS=
 ONLY_ROOTFS=0
 ONLY_IMAGE=0
@@ -105,18 +105,34 @@ if [[ -z $INCONFIG ]] ; then
    die "No config file name provided"
 fi
 
-if [[ -d $EXT_DIR && -f ${EXT_DIR}/config/${INCONFIG} ]] || \
-   [[ -d $EXT_DIR && -f ${EXT_DIR}/config/$(basename $INCONFIG) ]] || \
-   [[ -d $EXT_DIR && -f ${EXT_DIR}/config/${INCONFIG}.cfg ]] ; then
-   IGTOP_CONFIG="${EXT_DIR}/config"
-else
-   __IC=$(basename "$INCONFIG")
-   if realpath -e "${IGTOP_CONFIG}/${__IC}" > /dev/null 2>&1  ; then
-      INCONFIG="$__IC"
+# Normalize config name: if no extension was provided, try adding .cfg
+__BASENAME="$(basename -- "$INCONFIG")"
+case "$__BASENAME" in
+  *.cfg) : ;;
+  *) __BASENAME="${__BASENAME}.cfg" ;;
+ESAC
+
+# Prefer external overlay (-D) if it contains the config
+if [[ -d $EXT_DIR ]]; then
+   if [[ -f "${EXT_DIR}/config/${INCONFIG}" ]]; then
+      IGTOP_CONFIG="${EXT_DIR}/config"
+   elif [[ -f "${EXT_DIR}/config/${__BASENAME}" ]]; then
+      IGTOP_CONFIG="${EXT_DIR}/config"
+      INCONFIG="${__BASENAME}"
+   fi
+fi
+
+# Otherwise, fall back to in-repo config/
+if [[ "$IGTOP_CONFIG" == "${IGTOP}/config" ]]; then
+   if [[ -f "${IGTOP_CONFIG}/${INCONFIG}" ]]; then
+      : # use as-is
+   elif [[ -f "${IGTOP_CONFIG}/${__BASENAME}" ]]; then
+      INCONFIG="${__BASENAME}"
    else
       die "Can't resolve config file path for '${INCONFIG}'. Need -D?"
    fi
 fi
+
 CFG=$(realpath -e "${IGTOP_CONFIG}/${INCONFIG}" 2>/dev/null) || \
    die "Bad config spec: $IGTOP_CONFIG : $INCONFIG"
 
