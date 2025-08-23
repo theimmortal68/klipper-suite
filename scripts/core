@@ -14,98 +14,79 @@ assignv() {
       if [[ "$val" =~ ^$ ]] ; then
          eval unset "${var}"
       else
-         eval "${var}"="$val"
+         eval export "${var}=\"$val\""
       fi
    fi
 }
 
-
-# .ini file section parser reading key value pairs into the env as shell variables
-# initialising them only if their fully qualified equivalent is not set.
-# key names will be prefixed with section name and converted to lower case, e.g.
-#
-# [mysection]
-# foo=zzz
-# BAR=yyy
-#
-# will yield:
-# IGconf_mysection_foo=zzz
-# IGconf_mysection_bar=yyy
-#
+# Merge a single section from a config file into the environment
 merge_config_section() {
-   local section=$1
-   local cfg=$2
-   local attrs=$(crudini --get --format=sh "$cfg" "$section" 2>/dev/null)
-   if [ $? -eq 0 ] ; then
-      while IFS="=" read -r key value ; do
-         [[ "$key" =~ ^#.*$ ]] && continue
-         [[ "$key" =~ ^$ ]] && continue
-         local var=IGconf_"${section}"_"${key,,}"
-         assignv "$var" "$value"
-      done < <(printf '%s\n' "$attrs")
-   fi
-}
-
-
-# Read a config file and aggregate settings. Included config files will be read
-# from the directory of the current config file.
-aggregate_config() {
-   local cfg=$(realpath -m "$1" 2>/dev/null)
-   test -s "$cfg" || die "Invalid config: $cfg"
-   while read -r w1 w2; do
-    [[ "$w1" =~ ^#.*$ ]] && continue
-    [[ "$w1" =~ ^$ ]] && continue
-    case $w1 in
-       include)
-         [[ $(basename "$cfg") ==  $(basename "$w2") ]] && die "Recursive include: $cfg"
-         aggregate_config "$(dirname "$cfg")/$w2"
-         ;;
-       *)
-         ;;
-    esac
-   done < "$cfg"
-
-   merge_config_section device "$cfg"
-   merge_config_section image "$cfg"
-   merge_config_section sys "$cfg"
-   merge_config_section sbom "$cfg"
-   merge_config_section meta "$cfg"
-}
-
-
-# shell variable list parser reading key value pairs into the env with optional
-# section prefix. key names will be prefixed and converted to lower case, e.g.
-#
-# foo=zzz
-# BAR=yyy
-#
-# will yield:
-# IGconf_foo=zzz
-# IGconf_bar=yyy
-#
-apply_options() {
-   if [[ $# -eq 2 && -f $2 ]] ; then
-      local prefix=IGconf_"${1,,}"
-      local attrs=$(cat "$2")
-   else
-      local prefix=IGconf
-      local attrs=$(cat "$1")
-   fi
+   local section="${1,,}"
+   local file="$2"
+   local attrs=$(crudini --get --existing --format=lines "$file" "$section" || true)
+   [ -n "$attrs" ] || return 0
    while IFS="=" read -r key value ; do
       [[ "$key" =~ ^#.*$ ]] && continue
       [[ "$key" =~ ^$ ]] && continue
-      if [[ "$value" =~ ^$ ]] ; then
-         eval unset "${prefix}_${key,,}"
-      else
-         eval "${prefix}_${key,,}"="$value"
-      fi
+      local var="IGconf_${section}_${key,,}"
+      assignv "$var" "$value"
    done < <(printf '%s\n' "$attrs")
 }
 
+# Merge all known sections from a cfg into the environment
+merge_config() {
+   local cfg="$1"
+   [ -f "$cfg" ] || return 0
 
-# shell variable list parser with prefix that reads key value pairs into the env
-# as above, but only if the fully qualified IGconf key is not set or set to the
-# empty string.
+   while IFS="=" read -r key value ; do
+      [[ "$key" =~ ^#.*$ ]] && continue
+      [[ "$key" =~ ^$ ]] && continue
+      case "${key,,}" in
+         include)
+            [ -f "$value" ] && merge_config "$value"
+            ;;
+      esac
+   done < <(crudini --get --existing --format=lines "$cfg" 'include' || true)
+
+   while IFS="=" read -r key value ; do
+      [[ "$key" =~ ^#.*$ ]] && continue
+      [[ "$key" =~ ^$ ]] && continue
+      case "${key,,}" in
+         import)
+            [ -f "$value" ] && merge_config "$value"
+            ;;
+      esac
+   done < <(crudini --get --existing --format=lines "$cfg" 'import' || true)
+
+   while IFS="=" read -r key value ; do
+      [[ "$key" =~ ^#.*$ ]] && continue
+      [[ "$key" =~ ^$ ]] && continue
+      case "${key,,}" in
+         defaults)
+            [ -f "$value" ] && merge_config_section defaults "$value"
+            ;;
+      esac
+   done < <(crudini --get --existing --format=lines "$cfg" 'defaults' || true)
+
+   while IFS="=" read -r key value ; do
+      [[ "$key" =~ ^#.*$ ]] && continue
+      [[ "$key" =~ ^$ ]] && continue
+      case "${key,,}" in
+         options)
+            [ -f "$value" ] && merge_config_section options "$value"
+            ;;
+      esac
+   done < <(crudini --get --existing --format=lines "$cfg" 'options' || true)
+
+   # Known explicit sections
+   merge_config_section device "$cfg"
+   merge_config_section image "$cfg"
+   merge_config_section sys "$cfg"
+   merge_config_section meta "$cfg"
+}
+
+# shell variable list parser reading key value pairs into the env with optional
+# section prefix. key names will be prefixed and converted to lower 
 aggregate_options() {
    if [[ $# -eq 2 && -f $2 ]] ; then
       local attrs=$(cat "$2")
