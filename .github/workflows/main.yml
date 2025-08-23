@@ -136,7 +136,6 @@ jobs:
           artifacts: |
             ci_out/**/deploy/*.img.zst
             ci_out/**/deploy/*.img.zst.sha256
-            ci_out/**/deploy/*.sbom.zst
           artifactErrorsFailBuild: true
           generateReleaseNotes: false
           makeLatest: legacy
