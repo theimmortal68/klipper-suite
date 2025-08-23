@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Build a Bookworm ARM64 Raspberry Pi–style image using bdebstrap + genimage,
-# running bdebstrap under `podman unshare` and delegating hooks to bin/runner.
-# Includes colorized output and preseeded Debian + Raspberry Pi repo keyrings.
+# Build an ARM64 Debian Bookworm image using bdebstrap + genimage,
+# running bdebstrap under `podman unshare` with inline hooks (no bin/runner).
+# Includes color output and preseeded Debian + Raspberry Pi keyrings.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -52,13 +52,11 @@ need rsync
 need zstd
 need mkfs.vfat         # dosfstools
 need mke2fs            # e2fsprogs
+# yq only needed if you actually use devices/<dev>/layers.yaml
 if [[ -f "${ROOT}/devices/${KS_DEVICE}/layers.yaml" ]]; then
   need yq
 fi
 command -v qemu-aarch64-static >/dev/null 2>&1 || warn "qemu-aarch64-static not found; required to cross-build arm64 on x86_64."
-
-# Ensure runner is executable if present
-if [[ -f "${ROOT}/bin/runner" ]]; then chmod +x "${ROOT}/bin/runner"; fi
 
 # ------------------------- repo/key seeding knobs -----------------------------
 # Raspberry Pi repo (key + source)
@@ -229,31 +227,19 @@ EOF
 section "Generated bdebstrap.base.yaml (head)"
 sed -n '1,120p' "${BDEB_CFG_BASE}" || true
 
-# ------------------------- env for bin/runner ---------------------------------
-# Make variables available to hook scripts executed by bin/runner
-export KS_TOP="${ROOT}"
-export KS_DEVICE_PATH="${ROOT}/devices/${KS_DEVICE}"
-export KS_IMAGE="${ROOT}"             # you can repoint to an image-specific dir if you have one
-export KS_DEVICE="${KS_DEVICE_PATH}"  # runner expects KS_DEVICE to be a path
-# Optional external dir (leave unset if not used)
-# export KSconf_ext_dir="${ROOT}/ext"
-
-# ------------------------- run bdebstrap (podman unshare) --------------------
+# ------------------------- run bdebstrap (podman unshare; no bin/runner) -----
 section "bdebstrap (podman unshare)"
 
-# Build the command in the same spirit as your example:
 cmd=(podman unshare bdebstrap)
 
-# Add our main config
+# Main config and optional layer configs
 cmd+=(--config "${BDEB_CFG_BASE}")
-
-# Add any device/profile layer configs (-c merges in order)
 for f in "${LAYER_CFGS[@]}"; do
   [[ -f "${ROOT}/${f}" ]] || { error "Missing layer config: ${f}"; exit 1; }
   cmd+=(-c "${ROOT}/${f}")
 done
 
-# Name/hostname/output/target — force directory target
+# Strongly force directory target regardless of layer YAML
 cmd+=(--force --verbose --debug)
 cmd+=(--name "${KS_DEVICE}-${KS_PROFILE}-${KS_SUITE}-${KS_ARCH}")
 cmd+=(--hostname "${KS_HOSTNAME}")
@@ -261,10 +247,12 @@ cmd+=(--output "${OUT_DIR}")
 cmd+=(--target "${ROOTFS}")
 cmd+=(--format dir)
 
-# Seed keys BEFORE runner setup
+# Preseed Debian archive key inside target
 if [[ "${KS_ENABLE_DEBIAN_KEY}" == "1" ]]; then
   cmd+=(--setup-hook "copy-in ${ROOT}/${KS_DEBIAN_KEY_FILE} ${KS_DEBIAN_KEY_DST}")
 fi
+
+# Preseed Raspberry Pi repo key & source before apt runs (via copy-in)
 if [[ "${KS_ENABLE_RPI_REPO}" == "1" ]]; then
   cmd+=(--setup-hook "copy-in ${ROOT}/${KS_RPI_KEY_FILE} ${KS_RPI_KEY_DST}")
   RPI_SOURCES="$(mktemp)"
@@ -273,14 +261,7 @@ if [[ "${KS_ENABLE_RPI_REPO}" == "1" ]]; then
   cmd+=(--setup-hook "copy-in ${RPI_SOURCES} ${KS_RPI_APT_FILE}")
 fi
 
-# Delegate all hook phases to bin/runner (relative to repo root)
-# We'll run from ${ROOT} so that 'bin/runner' resolves.
-cmd+=(--setup-hook     'bin/runner setup "$@"')
-cmd+=(--essential-hook 'bin/runner essential "$@"')
-cmd+=(--customize-hook 'bin/runner customize "$@"')
-cmd+=(--cleanup-hook   'bin/runner cleanup "$@"')
-
-# Run from repo root so 'bin/runner' and relative script dirs resolve
+# Run from repo root so relative paths in --setup/customize hooks resolve
 pushd "${ROOT}" >/dev/null
 set -x
 "${cmd[@]}"
