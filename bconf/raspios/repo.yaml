@@ -1,18 +1,6 @@
 ---
 mmdebstrap:
-  mirrors:
-    - http://deb.debian.org/debian
-    - http://archive.raspberrypi.org/debian
-
-  # Add Raspberry Pi archive repo explicitly
-  include:
-    - repo: raspios
-      suites: [bookworm]
-      components: [main]
-      architectures: [arm64]
-      # apt source entry
-      sources:
-        - "deb [arch=arm64 signed-by=/usr/share/keyrings/raspberrypi-archive-keyring.gpg] http://archive.raspberrypi.org/debian bookworm main"
-      # key gets injected from /usr/share/keyrings inside target (seeded earlier)
-      keyrings:
-        - /usr/share/keyrings/raspberrypi-archive-keyring.gpg
+  customize-hooks:
+    # Add Raspberry Pi OS repo (Bookworm, arm64) with signed-by= key we seeded
+    - mkdir -p $1/etc/apt/sources.list.d
+    - bash -eux -c 'echo "deb [arch=arm64 signed-by=/usr/share/keyrings/raspberrypi-archive-keyring.gpg] http://archive.raspberrypi.org/debian bookworm main" > "$1/etc/apt/sources.list.d/raspios.list"'
