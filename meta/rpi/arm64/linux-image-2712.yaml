@@ -1,0 +1,9 @@
+---
+name: rpi-linux-2712
+env:
+  INITRD: "No"
+mmdebstrap:
+  architectures:
+    - arm64
+  packages:
+    - linux-image-rpi-2712

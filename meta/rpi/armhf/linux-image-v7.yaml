@@ -1,0 +1,7 @@
+---
+name: rpi-linux-v7
+env:
+  INITRD: "No"
+mmdebstrap:
+  packages:
+    - linux-image-rpi-v7
