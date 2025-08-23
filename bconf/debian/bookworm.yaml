@@ -1,5 +1,7 @@
 ---
 mmdebstrap:
+  keyrings:
+    - $KS_TOP/keys/debian-archive-keyring.gpg
   variant: apt
   architectures:
     - arm64
