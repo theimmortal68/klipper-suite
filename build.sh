@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build a Bookworm ARM64 Raspberry Pi–style image using bdebstrap + genimage,
-# with selectable DEVICE and PROFILE, colorized output,
-# and preseeded Debian + Raspberry Pi repo keyrings.
+# running bdebstrap under `podman unshare` and delegating hooks to bin/runner.
+# Includes colorized output and preseeded Debian + Raspberry Pi repo keyrings.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -45,19 +45,22 @@ section() { printf '\n%s==> %s%s\n'    "$BLU" "$1" "$RST"; }
 
 # ------------------------- tool checks ----------------------------------------
 need() { command -v "$1" >/dev/null 2>&1 || { error "Missing: $1"; exit 1; }; }
+need podman
 need bdebstrap
 need genimage
 need rsync
 need zstd
 need mkfs.vfat         # dosfstools
 need mke2fs            # e2fsprogs
-# yq only needed if you actually use devices/<dev>/layers.yaml
 if [[ -f "${ROOT}/devices/${KS_DEVICE}/layers.yaml" ]]; then
   need yq
 fi
 command -v qemu-aarch64-static >/dev/null 2>&1 || warn "qemu-aarch64-static not found; required to cross-build arm64 on x86_64."
 
-# ------------------------- defaults for repo/key seeding ----------------------
+# Ensure runner is executable if present
+if [[ -f "${ROOT}/bin/runner" ]]; then chmod +x "${ROOT}/bin/runner"; fi
+
+# ------------------------- repo/key seeding knobs -----------------------------
 # Raspberry Pi repo (key + source)
 : "${KS_ENABLE_RPI_REPO:=1}"
 : "${KS_RPI_REPO_URL:=http://archive.raspberrypi.org/debian}"
@@ -67,7 +70,7 @@ command -v qemu-aarch64-static >/dev/null 2>&1 || warn "qemu-aarch64-static not 
 : "${KS_RPI_KEY_DST:=/usr/share/keyrings/raspberrypi-archive-stable.gpg}"
 : "${KS_RPI_APT_FILE:=/etc/apt/sources.list.d/raspi.list}"
 
-# Debian archive key (copy in so the image has it preseeded too)
+# Debian archive key (copy into the image too)
 : "${KS_ENABLE_DEBIAN_KEY:=1}"
 : "${KS_DEBIAN_KEY_FILE:=keys/debian-archive-keyring.gpg}"
 : "${KS_DEBIAN_KEY_DST:=/usr/share/keyrings/debian-archive-keyring.gpg}"
@@ -77,7 +80,7 @@ OUT_DIR="${ROOT}/${KS_OUT_DIR}"
 ROOTFS="${OUT_DIR}/rootfs"
 LOGFILE="${OUT_DIR}/BUILD_LOG.txt"
 IMG_DIR="${OUT_DIR}/images"
-TMP_DIR="${OUT_DIR}/genimage-tmp}"
+TMP_DIR="${OUT_DIR}/genimage-tmp"
 CFG_AUTO="${OUT_DIR}/genimage.auto.cfg"
 BOOT_IMG="${OUT_DIR}/boot.vfat"
 BDEB_CFG_BASE="${OUT_DIR}/bdebstrap.base.yaml"
@@ -85,7 +88,7 @@ DEV_DIR="${ROOT}/devices/${KS_DEVICE}"
 DEV_LAYERS="${DEV_DIR}/layers.yaml"
 
 sudo rm -rf "${ROOTFS}" "${IMG_DIR}" "${TMP_DIR}" "${BOOT_IMG}" "${BDEB_CFG_BASE}" "${CFG_AUTO}" || true
-mkdir -p "${OUT_DIR}" "${IMG_DIR}" "${TMP_DIR}"
+mkdir -p "${OUT_DIR}" "${IMG_DIR}" "${TMP_DIR}" "${ROOTFS}"
 
 # mirror console to file; strip ANSI for the saved log if colors are on
 if $_color_on; then
@@ -102,11 +105,11 @@ info "Color  : ${KS_COLOR}"
 # ------------------------- verify key files if enabled ------------------------
 if [[ "${KS_ENABLE_RPI_REPO}" == "1" ]]; then
   [[ -f "${ROOT}/${KS_RPI_KEY_FILE}" ]] || { error "Missing RPi repo key: ${KS_RPI_KEY_FILE}"; exit 1; }
-  info "RPi APT repo enabled; key: ${KS_RPI_KEY_FILE}"
+  info "RPi repo key present: ${KS_RPI_KEY_FILE}"
 fi
 if [[ "${KS_ENABLE_DEBIAN_KEY}" == "1" ]]; then
-  [[ -f "${ROOT}/${KS_DEBIAN_KEY_FILE}" ]] || { error "Missing Debian archive key: ${KS_DEBIAN_KEY_FILE}"; exit 1; }
-  info "Debian archive key seeding enabled; key: ${KS_DEBIAN_KEY_FILE}"
+  [[ -f "${ROOT}/${KS_DEBIAN_KEY_FILE}" ]] || { error "Missing Debian key: ${KS_DEBIAN_KEY_FILE}"; exit 1; }
+  info "Debian key present: ${KS_DEBIAN_KEY_FILE}"
 fi
 
 # ------------------------- collect device/profile layers ----------------------
@@ -226,29 +229,23 @@ EOF
 section "Generated bdebstrap.base.yaml (head)"
 sed -n '1,120p' "${BDEB_CFG_BASE}" || true
 
-# ------------------------- run bdebstrap (merge layers) ----------------------
-section "bdebstrap"
-cmd=(bdebstrap
-  --config "${BDEB_CFG_BASE}"
-  --name   "${KS_DEVICE}-${KS_PROFILE}-${KS_SUITE}-${KS_ARCH}"
-  --output "${OUT_DIR}"
-  --force --verbose --debug)
+# ------------------------- env for bin/runner ---------------------------------
+# Make variables available to hook scripts executed by bin/runner
+export KS_TOP="${ROOT}"
+export KS_DEVICE_PATH="${ROOT}/devices/${KS_DEVICE}"
+export KS_IMAGE="${ROOT}"             # you can repoint to an image-specific dir if you have one
+export KS_DEVICE="${KS_DEVICE_PATH}"  # runner expects KS_DEVICE to be a path
+# Optional external dir (leave unset if not used)
+# export KSconf_ext_dir="${ROOT}/ext"
 
-# Preseed Debian archive key inside target
-if [[ "${KS_ENABLE_DEBIAN_KEY}" == "1" ]]; then
-  cmd+=(--setup-hook="copy-in ${ROOT}/${KS_DEBIAN_KEY_FILE} ${KS_DEBIAN_KEY_DST}")
-fi
+# ------------------------- run bdebstrap (podman unshare) --------------------
+section "bdebstrap (podman unshare)"
 
-# Preseed Raspberry Pi repo key & source before apt runs (NO redirection into \$1)
-if [[ "${KS_ENABLE_RPI_REPO}" == "1" ]]; then
-  # keyring
-  cmd+=(--setup-hook="copy-in ${ROOT}/${KS_RPI_KEY_FILE} ${KS_RPI_KEY_DST}")
-  # sources.list entry via copy-in (works for both tar and directory targets)
-  RPI_SOURCES="$(mktemp)"
-  printf 'deb [arch=%s signed-by=%s] %s %s %s\n' \
-    "${KS_RPI_REPO_ARCH}" "${KS_RPI_KEY_DST}" "${KS_RPI_REPO_URL}" "${KS_SUITE}" "${KS_RPI_REPO_COMPONENTS}" > "${RPI_SOURCES}"
-  cmd+=(--setup-hook="copy-in ${RPI_SOURCES} ${KS_RPI_APT_FILE}")
-fi
+# Build the command in the same spirit as your example:
+cmd=(podman unshare bdebstrap)
+
+# Add our main config
+cmd+=(--config "${BDEB_CFG_BASE}")
 
 # Add any device/profile layer configs (-c merges in order)
 for f in "${LAYER_CFGS[@]}"; do
@@ -256,9 +253,39 @@ for f in "${LAYER_CFGS[@]}"; do
   cmd+=(-c "${ROOT}/${f}")
 done
 
+# Name/hostname/output/target — force directory target
+cmd+=(--force --verbose --debug)
+cmd+=(--name "${KS_DEVICE}-${KS_PROFILE}-${KS_SUITE}-${KS_ARCH}")
+cmd+=(--hostname "${KS_HOSTNAME}")
+cmd+=(--output "${OUT_DIR}")
+cmd+=(--target "${ROOTFS}")
+cmd+=(--format dir)
+
+# Seed keys BEFORE runner setup
+if [[ "${KS_ENABLE_DEBIAN_KEY}" == "1" ]]; then
+  cmd+=(--setup-hook "copy-in ${ROOT}/${KS_DEBIAN_KEY_FILE} ${KS_DEBIAN_KEY_DST}")
+fi
+if [[ "${KS_ENABLE_RPI_REPO}" == "1" ]]; then
+  cmd+=(--setup-hook "copy-in ${ROOT}/${KS_RPI_KEY_FILE} ${KS_RPI_KEY_DST}")
+  RPI_SOURCES="$(mktemp)"
+  printf 'deb [arch=%s signed-by=%s] %s %s %s\n' \
+    "${KS_RPI_REPO_ARCH}" "${KS_RPI_KEY_DST}" "${KS_RPI_REPO_URL}" "${KS_SUITE}" "${KS_RPI_REPO_COMPONENTS}" > "${RPI_SOURCES}"
+  cmd+=(--setup-hook "copy-in ${RPI_SOURCES} ${KS_RPI_APT_FILE}")
+fi
+
+# Delegate all hook phases to bin/runner (relative to repo root)
+# We'll run from ${ROOT} so that 'bin/runner' resolves.
+cmd+=(--setup-hook     'bin/runner setup "$@"')
+cmd+=(--essential-hook 'bin/runner essential "$@"')
+cmd+=(--customize-hook 'bin/runner customize "$@"')
+cmd+=(--cleanup-hook   'bin/runner cleanup "$@"')
+
+# Run from repo root so 'bin/runner' and relative script dirs resolve
+pushd "${ROOT}" >/dev/null
 set -x
 "${cmd[@]}"
 set +x
+popd >/dev/null
 
 # ------------------------- assemble boot (FAT32) -----------------------------
 section "Assemble boot (FAT32)"
