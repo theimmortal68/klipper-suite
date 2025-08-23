@@ -247,22 +247,31 @@ cmd+=(--output "${OUT_DIR}")
 cmd+=(--target "${ROOTFS}")
 cmd+=(--format dir)
 
-# Ensure target directories exist early in setup stage
+# Make sure the target dirs exist early
 cmd+=(--setup-hook 'mkdir -p "$1/usr/share/keyrings"')
 cmd+=(--setup-hook 'mkdir -p "$1/etc/apt/sources.list.d"')
 
-# Preseed Debian archive key inside target
+# Preseed Debian archive key (copy into dir, not a file path)
 if [[ "${KS_ENABLE_DEBIAN_KEY}" == "1" ]]; then
-  cmd+=(--setup-hook "copy-in ${ROOT}/${KS_DEBIAN_KEY_FILE} ${KS_DEBIAN_KEY_DST}")
+  cmd+=(--setup-hook "copy-in ${ROOT}/${KS_DEBIAN_KEY_FILE} /usr/share/keyrings/")
 fi
 
-# Preseed Raspberry Pi repo key & source before apt runs (via copy-in)
+# Preseed Raspberry Pi repo key & source (copy into dirs)
 if [[ "${KS_ENABLE_RPI_REPO}" == "1" ]]; then
-  cmd+=(--setup-hook "copy-in ${ROOT}/${KS_RPI_KEY_FILE} ${KS_RPI_KEY_DST}")
-  RPI_SOURCES="$(mktemp)"
+  # keyring -> /usr/share/keyrings/raspberrypi-archive-stable.gpg
+  cmd+=(--setup-hook "copy-in ${ROOT}/${KS_RPI_KEY_FILE} /usr/share/keyrings/")
+
+  # prepare raspi.list with final basename so copy-in preserves it
+  RPI_SOURCES="${OUT_DIR}/raspi.list"
   printf 'deb [arch=%s signed-by=%s] %s %s %s\n' \
-    "${KS_RPI_REPO_ARCH}" "${KS_RPI_KEY_DST}" "${KS_RPI_REPO_URL}" "${KS_SUITE}" "${KS_RPI_REPO_COMPONENTS}" > "${RPI_SOURCES}"
-  cmd+=(--setup-hook "copy-in ${RPI_SOURCES} ${KS_RPI_APT_FILE}")
+    "${KS_RPI_REPO_ARCH}" \
+    "${KS_RPI_KEY_DST}" \
+    "${KS_RPI_REPO_URL}" \
+    "${KS_SUITE}" \
+    "${KS_RPI_REPO_COMPONENTS}" > "${RPI_SOURCES}"
+
+  # copy into sources.list.d dir (basename kept as raspi.list)
+  cmd+=(--setup-hook "copy-in ${RPI_SOURCES} /etc/apt/sources.list.d/")
 fi
 
 # Run from repo root so relative paths in --setup/customize hooks resolve
