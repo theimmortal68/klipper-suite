@@ -32,3 +32,4 @@ mmdebstrap:
   packages:
     # install packages from priority important (aptitude search '~pimportant' -F'%p')
     - debian-archive-keyring
+    - apt
