@@ -84,7 +84,7 @@ jobs:
       - name: Build image
         run: |
           set -euxo pipefail
-          ./build.sh
+          ./build.sh -o ks-options.template
           
       - name: Stage outputs (runner-owned; no root perms)
         if: always()
