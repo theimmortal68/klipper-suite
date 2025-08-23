@@ -84,9 +84,8 @@ jobs:
       - name: Build image
         run: |
           set -euxo pipefail
-          ./build.sh -c config/generic64-test.cfg
-          # post-image.sh already writes compressed .zst files to work/*/deploy/
-
+          ./build.sh
+          
       - name: Stage outputs (runner-owned; no root perms)
         if: always()
         run: |
