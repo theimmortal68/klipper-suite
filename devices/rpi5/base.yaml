@@ -1,3 +1,13 @@
 ---
-layers
-  - bconf/debian/bookworm-apt
+profiles:
+  base:
+    - bconf/d3bian/bookworm.yaml
+  klipper:
+    - bconf/common/rpi-boot.yaml
+    - bconf/klipper/klipper.yaml
+  mainsailos:
+    - bconf/common/rpi-boot.yaml
+    - bconf/mainsailos/mainsailos.yaml
+  ratos:
+    - bconf/common/rpi-boot.yaml
+    - bconf/ratos/ratos.yaml

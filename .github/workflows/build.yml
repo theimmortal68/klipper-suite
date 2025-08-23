@@ -1,4 +1,4 @@
-name: build-bdebstrap-arm64
+name: Build (bdebstrap + genimage)
 
 on:
   push:
@@ -17,33 +17,36 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install host deps (bdebstrap/mmdebstrap + qemu + yq + utils)
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bdebstrap mmdebstrap binfmt-support qemu-user-static zstd rsync curl
-          sudo update-binfmts --enable qemu-aarch64 || true
-          # yq (mikefarah) – single static binary
-          YQ_VERSION=v4.44.3
-          sudo curl -L "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -o /usr/local/bin/yq
-          sudo chmod +x /usr/local/bin/yq
-
-      - name: Build (bdebstrap layers)
-        run: |
-          bash ./build.sh
-
-      - name: Package rootfs as tar.zst
+      # Install all host dependencies (bdebstrap, genimage, qemu-user-static, etc.)
+      - name: Install host dependencies
         run: |
           set -euo pipefail
-          source ./options.sh
-          ROOT="out/${KS_DEVICE}-${KS_SUITE}-${KS_ARCH}/rootfs"
-          sudo tar --numeric-owner -C "${ROOT}" -I 'zstd -19' -cf "out/rootfs-${KS_DEVICE}-${KS_SUITE}-${KS_ARCH}.tar.zst" .
+          bash scripts/host-deps-apt.sh
 
-      - name: Upload artifact
+      # (Optional) Print the resolved config for debugging the run
+      - name: Print config
+        run: |
+          set -euo pipefail
+          if [ -f scripts/print-config.sh ]; then
+            bash scripts/print-config.sh
+          else
+            echo "print-config.sh not present, skipping."
+          fi
+
+      # Build the rootfs and disk image (RPi-style) using bdebstrap + genimage
+      - name: Build image
+        run: |
+          set -euo pipefail
+          bash build.sh
+
+      # Upload the image and log as artifacts
+      - name: Upload image artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rootfs-${{ github.sha }}-arm64
+          name: raspi-image-${{ github.sha }}
           path: |
-            out/rootfs-*.tar.zst
+            out/images/*.img
             out/BUILD_LOG.txt
+            out/genimage.auto.cfg
+          if-no-files-found: error
+          retention-days: 14
