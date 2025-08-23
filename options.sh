@@ -30,7 +30,7 @@ def KS_COMPONENTS  "main"
 def KS_MIRROR      "http://deb.debian.org/debian"
 
 # ---- Packages (Raspberry Pi defaults) ---------------------------------------
-def KS_PACKAGES "linux-image-rpi-v8,raspi-firmware,firmware-brcm80211,ca-certificates,locales,tzdata,sudo"
+#def KS_PACKAGES "linux-image-rpi-v8,raspi-firmware,firmware-brcm80211,ca-certificates,locales,tzdata,sudo"
 
 # ---- Identity / preseeding --------------------------------------------------
 def KS_HOSTNAME        "raspi"
