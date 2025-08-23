@@ -1,7 +1,9 @@
 ---
 profiles:
   base:
-    - bconf/d3bian/bookworm.yaml
+    - bconf/debian/bookworm.yaml
+    - bconf/raspios/firmware.yaml
+    - bconf/raspios/rpi5-kernel.yaml
   klipper:
     - bconf/common/rpi-boot.yaml
     - bconf/klipper/klipper.yaml
