@@ -124,10 +124,12 @@ if [[ -d "${ROOT}/keys" ]]; then
   rsync -a "${ROOT}/keys/" "${KS_APT_KEYDIR}/"
 fi
 
-# Normalize Raspberry Pi key name if vendored as *-keyring.gpg
-if [[ -f "${KS_APT_KEYDIR}/raspberrypi-archive-keyring.gpg" && ! -f "${KS_APT_KEYDIR}/raspberrypi-archive-keyring.gpg" ]]; then
-  cp -f "${KS_APT_KEYDIR}/raspberrypi-archive-keyring.gpg" \
-        "${KS_APT_KEYDIR}/raspberrypi-archive-keyring.gpg"
+# Normalize Raspberry Pi key name both ways so layers/sources can use either.
+if [[ -e "${KS_APT_KEYDIR}/raspberrypi-archive-keyring.gpg" && ! -e "${KS_APT_KEYDIR}/raspberrypi-archive-stable.gpg" ]]; then
+  ln -sf raspberrypi-archive-keyring.gpg "${KS_APT_KEYDIR}/raspberrypi-archive-stable.gpg"
+fi
+if [[ -e "${KS_APT_KEYDIR}/raspberrypi-archive-stable.gpg" && ! -e "${KS_APT_KEYDIR}/raspberrypi-archive-keyring.gpg" ]]; then
+  ln -sf raspberrypi-archive-stable.gpg "${KS_APT_KEYDIR}/raspberrypi-archive-keyring.gpg"
 fi
 
 [[ -d "${KS_APT_KEYDIR}" ]] || { error "apt keydir ${KS_APT_KEYDIR} is invalid"; exit 1; }
@@ -248,9 +250,17 @@ cmd+=(--output "${OUT_DIR}")
 cmd+=(--target "${ROOTFS}")
 cmd+=(--format dir)
 
+# Make KS_TOP visible to all hooks (layer hooks may use it)
+cmd+=(-e "KS_TOP=${ROOT}")
+
 # Inject assembled keydir into target early so mirrors with signed-by= work
 cmd+=(--setup-hook 'mkdir -p "$1/usr/share/keyrings"')
 cmd+=(--setup-hook "sync-in ${KS_APT_KEYDIR}/ /usr/share/keyrings")
+
+# Ensure both RPi key filenames exist inside target to satisfy various sources
+cmd+=(--setup-hook 'bash -euxc '\''cd "$1/usr/share/keyrings"; \
+  { [[ -e raspberrypi-archive-stable.gpg ]] || ln -sf raspberrypi-archive-keyring.gpg raspberrypi-archive-stable.gpg; }; \
+  { [[ -e raspberrypi-archive-keyring.gpg ]] || ln -sf raspberrypi-archive-stable.gpg raspberrypi-archive-keyring.gpg; }'\''')
 
 # Run from repo root so relative paths in hooks resolve
 pushd "${ROOT}" >/dev/null
