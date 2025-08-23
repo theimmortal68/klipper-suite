@@ -1,15 +1,11 @@
 #!/usr/bin/env bash
-# Build an ARM64 Debian Bookworm image using bdebstrap + genimage,
-# running bdebstrap under `podman unshare`.
-# Keys are assembled on the host and injected via hooks in the YAML (no --setup-hook in CLI).
-# Includes color output and base customize steps for user/locale/timezone.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 . "${ROOT}/options.sh"
 
-export KS_TOP="${ROOT}"   # Available to any shell hooks (not used in special hooks)
+export KS_TOP="${ROOT}"
 
 # ------------------------- arg parsing ----------------------------------------
 while [[ $# -gt 0 ]]; do
@@ -53,8 +49,8 @@ need bdebstrap
 need genimage
 need rsync
 need zstd
-need mkfs.vfat         # dosfstools
-need mke2fs            # e2fsprogs
+need mkfs.vfat
+need mke2fs
 if [[ -f "${ROOT}/devices/${KS_DEVICE}/layers.yaml" ]]; then
   need yq
 fi
@@ -108,27 +104,16 @@ section "Assemble APT keys (host)"
 KS_APT_KEYDIR="${OUT_DIR}/keys"
 mkdir -p "${KS_APT_KEYDIR}"
 
-# 1) System keyrings
-if [[ -d /usr/share/keyrings ]]; then
-  rsync -a /usr/share/keyrings/ "${KS_APT_KEYDIR}/"
-fi
-# 2) User keyrings (local/self-hosted)
-if [[ -d "${HOME}/.local/share/keyrings" ]]; then
-  rsync -a "${HOME}/.local/share/keyrings/" "${KS_APT_KEYDIR}/"
-fi
-# 3) Repo-provided key bundles (support both 'keydir' and 'keys')
-if [[ -d "${ROOT}/keydir" ]]; then
-  rsync -a "${ROOT}/keydir/" "${KS_APT_KEYDIR}/"
-fi
-if [[ -d "${ROOT}/keys" ]]; then
-  rsync -a "${ROOT}/keys/" "${KS_APT_KEYDIR}/"
-fi
+if [[ -d /usr/share/keyrings ]]; then rsync -a /usr/share/keyrings/ "${KS_APT_KEYDIR}/"; fi
+if [[ -d "${HOME}/.local/share/keyrings" ]]; then rsync -a "${HOME}/.local/share/keyrings/" "${KS_APT_KEYDIR}/"; fi
+if [[ -d "${ROOT}/keydir" ]]; then rsync -a "${ROOT}/keydir/" "${KS_APT_KEYDIR}/"; fi
+if [[ -d "${ROOT}/keys" ]]; then rsync -a "${ROOT}/keys/" "${KS_APT_KEYDIR}/"; fi
 
-# Normalize Raspberry Pi key names (either name may be referenced by layers)
-if [[ -f "${KS_APT_KEYDIR}/raspberrypi-archive-keyring.gpg" && ! -e "${KS_APT_KEYDIR}/raspberrypi-archive-stable.gpg" ]]; then
+# Make sure both names exist (some repos/documentation use either)
+if [[ -e "${KS_APT_KEYDIR}/raspberrypi-archive-keyring.gpg" && ! -e "${KS_APT_KEYDIR}/raspberrypi-archive-stable.gpg" ]]; then
   ln -sf raspberrypi-archive-keyring.gpg "${KS_APT_KEYDIR}/raspberrypi-archive-stable.gpg"
 fi
-if [[ -f "${KS_APT_KEYDIR}/raspberrypi-archive-stable.gpg" && ! -e "${KS_APT_KEYDIR}/raspberrypi-archive-keyring.gpg" ]]; then
+if [[ -e "${KS_APT_KEYDIR}/raspberrypi-archive-stable.gpg" && ! -e "${KS_APT_KEYDIR}/raspberrypi-archive-keyring.gpg" ]]; then
   ln -sf raspberrypi-archive-stable.gpg "${KS_APT_KEYDIR}/raspberrypi-archive-keyring.gpg"
 fi
 
@@ -144,14 +129,11 @@ set -euxo pipefail
 export DEBIAN_FRONTEND=noninteractive
 . /etc/ks/options.sh
 
-# Ensure RPi boot dir exists (Bookworm layout)
 mkdir -p /boot/firmware
 
-# Hostname + hosts
 echo "${KS_HOSTNAME}" > /etc/hostname
 printf "127.0.0.1\tlocalhost\n127.0.1.1\t%s\n" "${KS_HOSTNAME}" > /etc/hosts
 
-# Timezone + locale
 ln -sf "/usr/share/zoneinfo/${KS_TIMEZONE}" /etc/localtime
 echo "${KS_TIMEZONE}" > /etc/timezone
 sed -i "s/^# *${KS_LOCALE}/${KS_LOCALE}/" /etc/locale.gen || true
@@ -159,7 +141,6 @@ grep -qE "^${KS_LOCALE}" /etc/locale.gen || echo "${KS_LOCALE} UTF-8" >> /etc/lo
 locale-gen
 update-locale LANG="${KS_LOCALE}"
 
-# Minimal boot configs if none provided by packages/layers
 if [ ! -s /boot/firmware/config.txt ]; then
   cat > /boot/firmware/config.txt <<CONF
 [all]
@@ -171,7 +152,6 @@ if [ ! -s /boot/firmware/cmdline.txt ]; then
   echo "console=serial0,115200 console=tty1 root=LABEL=${KS_ROOTFS_LABEL} rootfstype=ext4 fsck.repair=yes rootwait quiet" > /boot/firmware/cmdline.txt
 fi
 
-# Default user (plaintext -> chpasswd)
 if [ "${KS_CREATE_USER}" = "1" ]; then
   if id -u "${KS_DEVICE_USER}" >/dev/null 2>&1; then
     echo "user exists, aborting by design"; exit 1
@@ -191,15 +171,19 @@ if [ "${KS_CREATE_USER}" = "1" ]; then
   fi
 fi
 
-# Marker
 echo "Built by bdebstrap at $(date -u +%FT%TZ)" > /etc/issue.d/ci-build.issue
 touch /root/BUILD_OK
 EOSH
 chmod +x "${APPLY}"
 
-# ------------------------- base bdebstrap YAML (hooks live here) --------------
+# ------------------------- base bdebstrap YAML --------------------------------
+# Ensure these exist to avoid 'unbound variable' and empty-list pitfalls
+: "${KS_COMPONENTS:=main}"
+: "${KS_PACKAGES:=}"  # may be empty
+
 BDEB_CFG_BASE="${OUT_DIR}/bdebstrap.base.yaml"
-cat > "${BDEB_CFG_BASE}" <<EOF
+{
+  cat <<EOF
 ---
 name: ${KS_DEVICE}-${KS_PROFILE}-${KS_SUITE}-${KS_ARCH}
 mmdebstrap:
@@ -213,25 +197,32 @@ $(printf '    - %s\n' ${KS_COMPONENTS//,/ })
   variant: ${KS_VARIANT}
   format: directory
   target: rootfs
-  packages:
-$(printf '    - %s\n' ${KS_PACKAGES//,/ })
+EOF
+
+  # only emit 'packages:' if non-empty to avoid ruamel KeyError
+  if [[ -n "${KS_PACKAGES//,/}" ]]; then
+    echo "  packages:"
+    printf '    - %s\n' ${KS_PACKAGES//,/ }
+  fi
+
+  cat <<'EOF'
   essential-hooks:
-    - echo tzdata tzdata/Areas select "${KS_TZ_AREA}" | chroot \$1 debconf-set-selections
-    - echo tzdata tzdata/Zones/${KS_TZ_AREA} select "${KS_TZ_CITY}" | chroot \$1 debconf-set-selections
-    - echo locales locales/locales_to_be_generated multiselect "${KS_LOCALE_GEN}" | chroot \$1 debconf-set-selections
-    - echo locales locales/default_environment_locale select "${KS_LOCALE_DEFAULT}" | chroot \$1 debconf-set-selections
-    - echo keyboard-configuration keyboard-configuration/xkb-keymap select "${KS_KB_KEYMAP}" | chroot \$1 debconf-set-selections
+    - echo tzdata tzdata/Areas select "${KS_TZ_AREA}" | chroot $1 debconf-set-selections
+    - echo tzdata tzdata/Zones/${KS_TZ_AREA} select "${KS_TZ_CITY}" | chroot $1 debconf-set-selections
+    - echo locales locales/locales_to_be_generated multiselect "${KS_LOCALE_GEN}" | chroot $1 debconf-set-selections
+    - echo locales locales/default_environment_locale select "${KS_LOCALE_DEFAULT}" | chroot $1 debconf-set-selections
+    - echo keyboard-configuration keyboard-configuration/xkb-keymap select "${KS_KB_KEYMAP}" | chroot $1 debconf-set-selections
   customize-hooks:
     # Provide options + apply script
     - copy-in ${ROOT}/options.sh /etc/ks/options.sh
     - copy-in ${APPLY} /apply.sh
 
-    # Seed keyrings from the host-assembled directory (absolute path expanded here)
-    - mkdir -p \$1/usr/share/keyrings
+    # Seed keyrings from the host-assembled directory
+    - mkdir -p $1/usr/share/keyrings
     - sync-in ${KS_APT_KEYDIR}/ /usr/share/keyrings
 
-    # Normalize RPi key filenames inside the target so both names work
-    - chroot "\$1" bash -eux -c '
+    # Normalize RPi key filenames
+    - chroot "$1" bash -eux -c '
         cd /usr/share/keyrings;
         if [ -e raspberrypi-archive-keyring.gpg ] && [ ! -e raspberrypi-archive-stable.gpg ]; then
           ln -sf raspberrypi-archive-keyring.gpg raspberrypi-archive-stable.gpg;
@@ -241,26 +232,23 @@ $(printf '    - %s\n' ${KS_PACKAGES//,/ })
         fi
       '
 
-    # Apply base customization (user/locale/timezone/boot)
-    - chroot "\$1" bash -eux /apply.sh
+    # Apply base customization
+    - chroot "$1" bash -eux /apply.sh
 EOF
+} > "${BDEB_CFG_BASE}"
 
 section "Generated bdebstrap.base.yaml (head)"
 sed -n '1,160p' "${BDEB_CFG_BASE}" || true
 
 # ------------------------- run bdebstrap (podman unshare) ---------------------
 section "bdebstrap (podman unshare)"
+cmd=(podman unshare bdebstrap --config "${BDEB_CFG_BASE}")
 
-cmd=(podman unshare bdebstrap)
-
-# Main config and optional layer configs
-cmd+=(--config "${BDEB_CFG_BASE}")
 for f in "${LAYER_CFGS[@]}"; do
   [[ -f "${ROOT}/${f}" ]] || { error "Missing layer config: ${f}"; exit 1; }
   cmd+=(-c "${ROOT}/${f}")
 done
 
-# Force dir output and set naming
 cmd+=(--force --verbose --debug)
 cmd+=(--name "${KS_DEVICE}-${KS_PROFILE}-${KS_SUITE}-${KS_ARCH}")
 cmd+=(--hostname "${KS_HOSTNAME}")
@@ -268,9 +256,6 @@ cmd+=(--output "${OUT_DIR}")
 cmd+=(--target "${ROOTFS}")
 cmd+=(--format dir)
 
-# No --setup-hook here by design
-
-# Run from repo root so relative paths in hooks resolve
 pushd "${ROOT}" >/dev/null
 set -x
 "${cmd[@]}"
