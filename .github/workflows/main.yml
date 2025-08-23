@@ -82,9 +82,6 @@ jobs:
       #     ls -l keydir
 
       - name: Build image
-        env:
-          KSconf_sys_apt_keydir: ${{ github.workspace }}/keydir
-          KSconf_sys_apt_cache_dir: ${{ env.APT_CACHE_DIR }}
         run: |
           set -euxo pipefail
           ./build.sh -c config/generic64-test.cfg
