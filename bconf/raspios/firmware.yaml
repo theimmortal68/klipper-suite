@@ -1,9 +1,0 @@
----
-name: rpi-firmware
-mmdebstrap:
-  variant: apt
-  packages:
-    - raspi-firmware
-  customize-hooks:
-    - ln -sf firmware/overlays $1/boot/overlays
-#    - install -m 644 $KS_TEMPLATES/boot-firmware/config.txt $1/boot/firmware/

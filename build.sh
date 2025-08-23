@@ -1,298 +1,441 @@
-#!/usr/bin/env bash
-# Build an ARM64 Debian Bookworm image using bdebstrap + genimage,
-# running bdebstrap under `podman unshare`.
-# Keys are assembled on the host; repo/key syncing happens in YAML layers.
-# Includes color output and base customize steps for user/locale/timezone.
-set -euo pipefail
+#!/bin/bash
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=/dev/null
-. "${ROOT}/options.sh"
+set -uo pipefail
 
-export KS_TOP="${ROOT}"   # for any ${KS_TOP} usages inside layers if present
+IGTOP=$(readlink -f "$(dirname "$0")")
 
-# ------------------------- arg parsing ----------------------------------------
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    -d|--device)   KS_DEVICE="${2:?}"; shift 2 ;;
-    -p|--profile)  KS_PROFILE="${2:?}"; shift 2 ;;
-    -h|--help)     echo "Usage: $0 [--device <name>] [--profile base|klipper|mainsailos|ratos]"; exit 0 ;;
-    --)            shift; break ;;
-    *)             if [[ -z "${KS_DEVICE_SET:-}" ]]; then
-                     KS_DEVICE="$1"; KS_DEVICE_SET=1; shift
-                   elif [[ -z "${KS_PROFILE_SET:-}" ]]; then
-                     KS_PROFILE="$1"; KS_PROFILE_SET=1; shift
-                   else
-                     echo "Unexpected arg: $1" >&2; exit 1
-                   fi ;;
-  esac
-done
+source "${IGTOP}/scripts/dependencies_check"
+dependencies_check "${IGTOP}/depends" || exit 1
+source "${IGTOP}/scripts/common"
+source "${IGTOP}/scripts/core"
+source "${IGTOP}/bin/igconf"
 
-# ------------------------- color helpers --------------------------------------
-: "${KS_COLOR:=auto}"
-_color_on=false
-if [[ "${KS_COLOR}" == "always" ]] || { [[ "${KS_COLOR}" == "auto" ]] && { [[ -t 1 ]] || [[ -n "${GITHUB_ACTIONS:-}" ]]; }; }; then
-  _color_on=true
-fi
-if $_color_on; then
-  RED=$'\e[31m'; GRN=$'\e[32m'; YEL=$'\e[33m'; BLU=$'\e[34m'; CYN=$'\e[36m'; BLD=$'\e[1m'; RST=$'\e[0m'
-  export PS4=$'\e[36m+ \e[0m'
-else
-  RED=""; GRN=""; YEL=""; BLU=""; CYN=""; BLD=""; RST=""
-  export PS4='+ '
-fi
-info()    { printf '%s[INFO]%s %s\n'  "$GRN" "$RST" "$*"; }
-warn()    { printf '%s[WARN]%s %s\n'  "$YEL" "$RST" "$*"; }
-error()   { printf '%s[ERR ]%s %s\n'  "$RED" "$RST" "$*"; }
-section() { printf '\n%s==> %s%s\n'    "$BLU" "$1" "$RST"; }
 
-# ------------------------- tool checks ----------------------------------------
-need() { command -v "$1" >/dev/null 2>&1 || { error "Missing: $1"; exit 1; }; }
-need podman
-need bdebstrap
-need genimage
-need rsync
-need zstd
-need mkfs.vfat         # dosfstools
-need mke2fs            # e2fsprogs
-if [[ -f "${ROOT}/devices/${KS_DEVICE}/layers.yaml" ]]; then
-  need yq
-fi
-command -v qemu-aarch64-static >/dev/null 2>&1 || warn "qemu-aarch64-static not found; required to cross-build arm64 on x86_64."
+# Defaults
+EXT_DIR=
+EXT_META=
+EXT_NS=
+EXT_NSDIR=
+EXT_NSMETA=
+INOPTIONS=
+INCONFIG=generic64-apt-simple
+ONLY_ROOTFS=0
+ONLY_IMAGE=0
 
-# ------------------------- paths & logging ------------------------------------
-OUT_DIR="${ROOT}/${KS_OUT_DIR}"
-ROOTFS="${OUT_DIR}/rootfs"
-LOGFILE="${OUT_DIR}/BUILD_LOG.txt"
-IMG_DIR="${OUT_DIR}/images"
-TMP_DIR="${OUT_DIR}/genimage-tmp"
-CFG_AUTO="${OUT_DIR}/genimage.auto.cfg"
-BOOT_IMG="${OUT_DIR}/boot.vfat"
-BDEB_CFG_BASE="${OUT_DIR}/bdebstrap.base.yaml"
-DEV_DIR="${ROOT}/devices/${KS_DEVICE}"
-DEV_LAYERS="${DEV_DIR}/layers.yaml"
 
-sudo rm -rf "${ROOTFS}" "${IMG_DIR}" "${TMP_DIR}" "${BOOT_IMG}" "${BDEB_CFG_BASE}" "${CFG_AUTO}" || true
-mkdir -p "${OUT_DIR}" "${IMG_DIR}" "${TMP_DIR}" "${ROOTFS}"
+usage()
+{
+cat <<-EOF >&2
+Usage
+  $(basename "$0") [options]
 
-# mirror console to file; strip ANSI for the saved log if colors are on
-if $_color_on; then
-  exec > >(tee >(sed -E 's/\x1b\[[0-9;]*m//g' > "${LOGFILE}")) 2>&1
-else
-  exec > >(tee "${LOGFILE}") 2>&1
-fi
+Root filesystem and image generation utility.
 
-section "Build start"
-info "Device : ${KS_DEVICE}"
-info "Profile: ${KS_PROFILE}"
-info "Color  : ${KS_COLOR}"
-
-# ------------------------- collect device/profile layers ----------------------
-LAYER_CFGS=()
-if [[ -f "${DEV_LAYERS}" ]]; then
-  yq -e '.profiles' "${DEV_LAYERS}" >/dev/null || { error "layers.yaml missing 'profiles' key: ${DEV_LAYERS}"; exit 1; }
-  yq -e ".profiles.${KS_PROFILE}" "${DEV_LAYERS}" >/dev/null || {
-    error "Profile '${KS_PROFILE}' not defined for device '${KS_DEVICE}'."
-    echo "Available: $(yq -r '.profiles | keys | join(", ")' "${DEV_LAYERS}")"
-    exit 1
-  }
-  mapfile -t LAYER_CFGS < <(yq -r ".profiles.${KS_PROFILE}[]?" "${DEV_LAYERS}")
-  section "Layers"
-  for f in "${LAYER_CFGS[@]}"; do info "$f"; done
-else
-  warn "No device layer file at ${DEV_LAYERS}; continuing with base config only."
-fi
-
-# ------------------------- assemble host APT keydir (no hooks here) -----------
-section "Assemble APT keys (host)"
-KS_APT_KEYDIR="${OUT_DIR}/keys"
-mkdir -p "${KS_APT_KEYDIR}"
-
-# 1) System keyrings
-if [[ -d /usr/share/keyrings ]]; then
-  rsync -a /usr/share/keyrings/ "${KS_APT_KEYDIR}/"
-fi
-# 2) User keyrings (if any on self-hosted or local runs)
-if [[ -d "${HOME}/.local/share/keyrings" ]]; then
-  rsync -a "${HOME}/.local/share/keyrings/" "${KS_APT_KEYDIR}/"
-fi
-# 3) Repo-provided key bundles (support both 'keydir' and 'keys')
-if [[ -d "${ROOT}/keydir" ]]; then
-  rsync -a "${ROOT}/keydir/" "${KS_APT_KEYDIR}/"
-fi
-if [[ -d "${ROOT}/keys" ]]; then
-  rsync -a "${ROOT}/keys/" "${KS_APT_KEYDIR}/"
-fi
-
-# Friendly symlink some common names for RPi keys if present
-if [[ -f "${KS_APT_KEYDIR}/raspberrypi-archive-keyring.gpg" && ! -e "${KS_APT_KEYDIR}/raspberrypi-archive-stable.gpg" ]]; then
-  ln -s raspberrypi-archive-keyring.gpg "${KS_APT_KEYDIR}/raspberrypi-archive-stable.gpg"
-fi
-
-[[ -d "${KS_APT_KEYDIR}" ]] || { error "apt keydir ${KS_APT_KEYDIR} is invalid"; exit 1; }
-info "Keydir assembled at: ${KS_APT_KEYDIR}"
-ls -l "${KS_APT_KEYDIR}" || true
-
-# ------------------------- in-chroot apply script -----------------------------
-APPLY="$(mktemp)"
-cat > "${APPLY}" <<'EOSH'
-#!/usr/bin/env bash
-set -euxo pipefail
-export DEBIAN_FRONTEND=noninteractive
-. /etc/ks/options.sh
-
-# Ensure RPi boot dir exists (Bookworm layout)
-mkdir -p /boot/firmware
-
-# Hostname + hosts
-echo "${KS_HOSTNAME}" > /etc/hostname
-printf "127.0.0.1\tlocalhost\n127.0.1.1\t%s\n" "${KS_HOSTNAME}" > /etc/hosts
-
-# Timezone + locale
-ln -sf "/usr/share/zoneinfo/${KS_TIMEZONE}" /etc/localtime
-echo "${KS_TIMEZONE}" > /etc/timezone
-sed -i "s/^# *${KS_LOCALE}/${KS_LOCALE}/" /etc/locale.gen || true
-grep -qE "^${KS_LOCALE}" /etc/locale.gen || echo "${KS_LOCALE} UTF-8" >> /etc/locale.gen
-locale-gen
-update-locale LANG="${KS_LOCALE}"
-
-# Minimal RPi boot configs if none provided by packages/layers
-if [ ! -s /boot/firmware/config.txt ]; then
-  cat > /boot/firmware/config.txt <<CONF
-[all]
-auto_initramfs=1
-dtparam=audio=on
-CONF
-fi
-if [ ! -s /boot/firmware/cmdline.txt ]; then
-  echo "console=serial0,115200 console=tty1 root=LABEL=${KS_ROOTFS_LABEL} rootfstype=ext4 fsck.repair=yes rootwait quiet" > /boot/firmware/cmdline.txt
-fi
-
-# Default user (plaintext -> chpasswd)
-if [ "${KS_CREATE_USER}" = "1" ]; then
-  if id -u "${KS_DEVICE_USER}" >/dev/null 2>&1; then
-    echo "user exists, aborting by design"; exit 1
-  fi
-  useradd -m -s "${KS_USER_SHELL}" -G "${KS_USER_GROUPS}" "${KS_DEVICE_USER}"
-  if [ -n "${KS_USER_PASSWORD_PLAIN}" ]; then
-    set +x
-    if [ -n "${KS_PASSWORD_CRYPT_METHOD}" ]; then
-      printf '%s:%s\n' "${KS_DEVICE_USER}" "${KS_USER_PASSWORD_PLAIN}" | chpasswd --crypt-method "${KS_PASSWORD_CRYPT_METHOD}"
-    else
-      printf '%s:%s\n' "${KS_DEVICE_USER}" "${KS_USER_PASSWORD_PLAIN}" | chpasswd
-    fi
-    unset KS_USER_PASSWORD_PLAIN || true
-    set -x
-  else
-    passwd -l "${KS_DEVICE_USER}"
-  fi
-fi
-
-# Marker
-echo "Built by bdebstrap at $(date -u +%FT%TZ)" > /etc/issue.d/ci-build.issue
-touch /root/BUILD_OK
-EOSH
-chmod +x "${APPLY}"
-
-# ------------------------- base bdebstrap YAML --------------------------------
-# Guard KS_PACKAGES to avoid empty-list YAML issues
-: "${KS_PACKAGES:=apt,ca-certificates,gnupg,locales,tzdata,netbase}"
-export KS_PACKAGES
-
-BDEB_CFG_BASE="${OUT_DIR}/bdebstrap.base.yaml"
-cat > "${BDEB_CFG_BASE}" <<EOF
----
-name: ${KS_DEVICE}-${KS_PROFILE}-${KS_SUITE}-${KS_ARCH}
-mmdebstrap:
-  suite: ${KS_SUITE}
-  architectures:
-    - ${KS_ARCH}
-  components:
-$(printf '    - %s\n' ${KS_COMPONENTS//,/ })
-  mirrors:
-    - ${KS_MIRROR}
-  variant: ${KS_VARIANT}
-  format: directory
-  target: rootfs
-  packages:
-$( [[ -n "${KS_PACKAGES:-}" ]] && printf '    - %s\n' ${KS_PACKAGES//,/ } )
-  essential-hooks:
-    - echo tzdata tzdata/Areas select "${KS_TZ_AREA}" | chroot \$1 debconf-set-selections
-    - echo tzdata tzdata/Zones/${KS_TZ_AREA} select "${KS_TZ_CITY}" | chroot \$1 debconf-set-selections
-    - echo locales locales/locales_to_be_generated multiselect "${KS_LOCALE_GEN}" | chroot \$1 debconf-set-selections
-    - echo locales locales/default_environment_locale select "${KS_LOCALE_DEFAULT}" | chroot \$1 debconf-set-selections
-    - echo keyboard-configuration keyboard-configuration/xkb-keymap select "${KS_KB_KEYMAP}" | chroot \$1 debconf-set-selections
-  customize-hooks:
-    # Provide options + apply script
-    - copy-in ${ROOT}/options.sh /etc/ks/options.sh
-    - copy-in ${APPLY} /apply.sh
-
-    # Apply base customization (user/locale/timezone/boot)
-    - chroot "\$1" bash -eux /apply.sh
+Options:
+  [-c <config>]    Name of config file, location defaults to config/
+                   Default: $INCONFIG
+  [-D <directory>] Directory that takes precedence over the default in-tree
+                   hierarchy when searching for config files, profiles, meta
+                   layers and image layouts.
+  [-N <namespace>] Optional namespace to specify an additional sub-directory
+                   hierarchy within the directory provided by -D of where to
+                   search for meta layers.
+  [-o <file>]      Path to shell-style fragment specifying variables as
+                   key=value. These variables can override the defaults, those
+                   set by the config file, or provide completely new variables
+                   available to both rootfs and image generation stages.
+  Developer Options
+  [-r]             Establish configuration, build rootfs, exit after post-build.
+  [-i]             Establish configuration, skip rootfs, run hooks, generate image.
 EOF
+}
 
-section "Generated bdebstrap.base.yaml (head)"
-sed -n '1,160p' "${BDEB_CFG_BASE}" || true
 
-# ------------------------- run bdebstrap (podman unshare) ---------------------
-section "bdebstrap (podman unshare)"
-
-cmd=(podman unshare bdebstrap)
-
-# Main config and optional layer configs
-cmd+=(--config "${BDEB_CFG_BASE}")
-for f in "${LAYER_CFGS[@]}"; do
-  [[ -f "${ROOT}/${f}" ]] || { error "Missing layer config: ${f}"; exit 1; }
-  cmd+=(-c "${ROOT}/${f}")
+while getopts "c:D:hiN:o:r" flag ; do
+   case "$flag" in
+      c)
+         INCONFIG="$OPTARG"
+         ;;
+      h)
+         usage ; exit 0
+         ;;
+      D)
+         EXT_DIR=$(realpath -m "$OPTARG")
+         [[ -d $EXT_DIR ]] || { usage ; die "Invalid external directory: $EXT_DIR" ; }
+         ;;
+      i)
+         ONLY_IMAGE=1
+         ;;
+      N)
+         EXT_NS="$OPTARG"
+         ;;
+      o)
+         INOPTIONS=$(realpath -m "$OPTARG")
+         [[ -f $INOPTIONS ]] || { usage ; die "Invalid options file: $INOPTIONS" ; }
+         ;;
+      r)
+         ONLY_ROOTFS=1
+         ;;
+      ?|*)
+         usage ; exit 1
+         ;;
+   esac
 done
 
-# Force dir output and set naming
-cmd+=(--force --verbose --debug)
-cmd+=(--name "${KS_DEVICE}-${KS_PROFILE}-${KS_SUITE}-${KS_ARCH}")
-cmd+=(--hostname "${KS_HOSTNAME}")
-cmd+=(--output "${OUT_DIR}")
-cmd+=(--target "${ROOTFS}")
-cmd+=(--format dir)
 
-# Run from repo root so any relative paths inside YAML resolve consistently
-pushd "${ROOT}" >/dev/null
-set -x
-"${cmd[@]}"
-set +x
-popd >/dev/null
+[[ -d $EXT_DIR ]] && EXT_META=$(realpath -e "${EXT_DIR}/meta" 2>/dev/null)
 
-# ------------------------- assemble boot (FAT32) -----------------------------
-section "Assemble boot (FAT32)"
-dd if=/dev/zero of="${BOOT_IMG}" bs=1M count="${KS_BOOT_SIZE_MIB}" status=none
-mkfs.vfat -n "${KS_BOOT_LABEL}" "${BOOT_IMG}"
-TMP_BOOT="$(mktemp -d)"
-sudo mount -o loop "${BOOT_IMG}" "${TMP_BOOT}"
-sudo rsync -aH --delete "${ROOTFS}/boot/firmware/" "${TMP_BOOT}/" || true
-sync; sudo umount "${TMP_BOOT}"; rmdir "${TMP_BOOT}"
+[[ -n $EXT_NS && ! -d $EXT_DIR ]] && die "External namespace supplied without external dir"
 
-# ------------------------- compute rootfs size --------------------------------
-ROOT_SIZE_MIB=$(( KS_IMG_SIZE_MIB - KS_BOOT_SIZE_MIB - 8 ))
-(( ROOT_SIZE_MIB > 0 )) || { error "Increase KS_IMG_SIZE_MIB"; exit 1; }
+if [[ -d $EXT_DIR && -n $EXT_NS ]] ; then
+   EXT_NSDIR=$(realpath -e "${EXT_DIR}/$EXT_NS" 2>/dev/null)
+   [[ -d $EXT_NSDIR ]] || die "External namespace dir $EXT_NS does not exist in $EXT_DIR"
+   EXT_NSMETA=$(realpath -e "${EXT_DIR}/$EXT_NS/meta" 2>/dev/null)
+fi
 
-# ------------------------- genimage config (auto) -----------------------------
-section "genimage"
-cat > "${CFG_AUTO}" <<CFGEOF
-image "${KS_IMG_NAME}" {
-  hdimage { partition-table-type = "${KS_PART_TABLE}" }
-  partition boot   { partition-type = 0x0C; image = "boot.vfat"; offset = 1M }
-  partition rootfs { partition-type = 0x83; image = "rootfs.ext4" }
+
+# Constants
+IGTOP_CONFIG="${IGTOP}/config"
+IGTOP_DEVICE="${IGTOP}/device"
+IGTOP_IMAGE="${IGTOP}/image"
+IGTOP_PROFILE="${IGTOP}/profile"
+IGTOP_SBOM="${IGTOP}/sbom"
+META="${IGTOP}/meta"
+META_HOOKS="${IGTOP}/meta-hooks"
+RPI_TEMPLATES="${IGTOP}/templates/rpi"
+
+
+# Establish the top level directory hierarchy by detecting the config file
+INCONFIG="${INCONFIG%.cfg}.cfg"
+if [[ -d ${EXT_DIR} ]] && \
+   [[ -f $(realpath -e ${EXT_DIR}/config/${INCONFIG} 2>/dev/null) ]] ; then
+   IGTOP_CONFIG="${EXT_DIR}/config"
+else
+   __IC=$(basename "$INCONFIG")
+   if realpath -e "${IGTOP_CONFIG}/${__IC}" > /dev/null 2>&1  ; then
+      INCONFIG="$__IC"
+   else
+      die "Can't resolve config file path for '${INCONFIG}'. Need -D?"
+   fi
+fi
+CFG=$(realpath -e "${IGTOP_CONFIG}/${INCONFIG}" 2>/dev/null) || \
+   die "Bad config spec: $IGTOP_CONFIG : $INCONFIG"
+
+
+[[ -d $EXT_META ]] && msg "External meta at $EXT_META"
+[[ -d $EXT_NSMETA ]] && msg "External [$EXT_NS] meta at $EXT_NSMETA"
+
+
+# Set via cmdline only
+[[ -d $EXT_DIR ]] && IGconf_ext_dir="$EXT_DIR"
+[[ -d $EXT_NSDIR ]] && IGconf_ext_nsdir="$EXT_NSDIR"
+
+
+msg "Reading $CFG with options [$INOPTIONS]"
+
+# Load options(1) to perform explicit set/unset
+[[ -s "$INOPTIONS" ]] && apply_options "$INOPTIONS"
+
+
+# Merge config
+aggregate_config "$CFG"
+
+
+# Mandatory for subsequent parsing
+[[ -z ${IGconf_image_layout+x} ]] && die "No image layout provided"
+[[ -z ${IGconf_device_class+x} ]] && die "No device class provided"
+[[ -z ${IGconf_device_profile+x} ]] && die "No device profile provided"
+
+
+# Internalise hierarchy paths, prioritising the external sub-directory tree
+[[ -d $EXT_DIR ]] && IGDEVICE=$(realpath -e "${EXT_DIR}/device/$IGconf_device_class" 2>/dev/null)
+: ${IGDEVICE:=${IGTOP_DEVICE}/$IGconf_device_class}
+
+[[ -d $EXT_DIR ]] && IGIMAGE=$(realpath -e "${EXT_DIR}/image/$IGconf_image_layout" 2>/dev/null)
+: ${IGIMAGE:=${IGTOP_IMAGE}/$IGconf_image_layout}
+
+[[ -d $EXT_DIR ]] && IGPROFILE=$(realpath -e "${EXT_DIR}/profile/$IGconf_device_profile" 2>/dev/null)
+: ${IGPROFILE:=${IGTOP_PROFILE}/$IGconf_device_profile}
+
+
+# Final path validation
+for i in IGDEVICE IGIMAGE IGPROFILE ; do
+   msg "$i ${!i}"
+   realpath -e ${!i} > /dev/null 2>&1 || die "$i is invalid"
+done
+
+
+# Merge config options for selected device and image
+[[ -s ${IGDEVICE}/config.options ]] && aggregate_options "device" ${IGDEVICE}/config.options
+[[ -s ${IGIMAGE}/config.options ]] && aggregate_options "image" ${IGIMAGE}/config.options
+
+
+# Merge defaults for selected device and image
+[[ -s ${IGDEVICE}/build.defaults ]] && aggregate_options "device" ${IGDEVICE}/build.defaults
+[[ -s ${IGIMAGE}/build.defaults ]] && aggregate_options "image" ${IGIMAGE}/build.defaults
+[[ -s ${IGIMAGE}/provision.defaults ]] && aggregate_options "image" ${IGIMAGE}/provision.defaults
+
+
+# Merge remaining defaults
+aggregate_options "device" ${IGTOP_DEVICE}/build.defaults
+aggregate_options "image" ${IGTOP_IMAGE}/build.defaults
+aggregate_options "image" ${IGTOP_IMAGE}/provision.defaults
+aggregate_options "sys" ${IGTOP}/sys-build.defaults
+aggregate_options "sbom" ${IGTOP_SBOM}/defaults
+aggregate_options "meta" ${META}/defaults
+
+
+# Load options(2) for final overrides
+[[ -s "$INOPTIONS" ]] && apply_options "$INOPTIONS"
+
+
+# Assemble APT keys
+if igconf_isnset sys_apt_keydir ; then
+   IGconf_sys_apt_keydir="${IGconf_sys_workdir}/keys"
+   mkdir -p "$IGconf_sys_apt_keydir"
+   [[ -d /usr/share/keyrings ]] && rsync -a /usr/share/keyrings/ $IGconf_sys_apt_keydir
+   [[ -d "$USER/.local/share/keyrings" ]] && rsync -a "$USER/.local/share/keyrings/" $IGconf_sys_apt_keydir
+   rsync -a "$IGTOP/keydir/" $IGconf_sys_apt_keydir
+fi
+[[ -d $IGconf_sys_apt_keydir ]] || die "apt keydir $IGconf_sys_apt_keydir is invalid"
+
+
+# Assemble environment for rootfs and image creation, propagating IG variables
+# to rootfs and post-build stages as appropriate.
+ENV_ROOTFS=()
+ENV_POST_BUILD=()
+for v in $(compgen -A variable -X '!IGconf*') ; do
+   case $v in
+      IGconf_device_timezone)
+         ENV_ROOTFS+=('--env' ${v}="${!v}")
+         ENV_POST_BUILD+=(${v}="${!v}")
+         ENV_ROOTFS+=('--env' IGconf_device_timezone_area="${!v%%/*}")
+         ENV_ROOTFS+=('--env' IGconf_device_timezone_city="${!v##*/}")
+         ENV_POST_BUILD+=(IGconf_device_timezone_area="${!v%%/*}")
+         ENV_POST_BUILD+=(IGconf_device_timezone_city="${!v##*/}")
+         ;;
+      IGconf_sys_apt_proxy_http)
+         err=$(curl --head --silent --write-out "%{http_code}" --output /dev/null "${!v}")
+         [[ $? -ne 0 ]] && die "unreachable proxy: ${!v}"
+         msg "$err ${!v}"
+         ENV_ROOTFS+=('--aptopt' "Acquire::http { Proxy \"${!v}\"; }")
+         ENV_ROOTFS+=('--env' ${v}="${!v}")
+         ;;
+      IGconf_sys_apt_keydir)
+         ENV_ROOTFS+=('--aptopt' "Dir::Etc::TrustedParts ${!v}")
+         ENV_ROOTFS+=('--env' ${v}="${!v}")
+         ;;
+      IGconf_sys_apt_get_purge)
+         if igconf_isy $v ; then ENV_ROOTFS+=('--aptopt' "APT::Get::Purge true") ; fi
+         ;;
+      IGconf_ext_dir|IGconf_ext_nsdir )
+         ENV_ROOTFS+=('--env' ${v}="${!v}")
+         ENV_POST_BUILD+=(${v}="${!v}")
+         if [ -d "${!v}/bin" ] ; then
+            PATH="${!v}/bin:${PATH}"
+            ENV_ROOTFS+=('--env' PATH="$PATH")
+            ENV_POST_BUILD+=(PATH="${PATH}")
+         fi
+         ;;
+
+      *)
+         ENV_ROOTFS+=('--env' ${v}="${!v}")
+         ENV_POST_BUILD+=(${v}="${!v}")
+         ;;
+   esac
+done
+ENV_ROOTFS+=('--env' IGTOP=$IGTOP)
+ENV_ROOTFS+=('--env' META_HOOKS=$META_HOOKS)
+ENV_ROOTFS+=('--env' RPI_TEMPLATES=$RPI_TEMPLATES)
+
+for i in IGDEVICE IGIMAGE IGPROFILE ; do
+   ENV_ROOTFS+=('--env' ${i}="${!i}")
+   ENV_POST_BUILD+=(${i}="${!i}")
+done
+
+
+# Final PATH setup
+ENV_ROOTFS+=('--env' PATH="${IGTOP}/bin:$PATH")
+mkdir -p ${IGconf_sys_workdir}/host/bin
+ENV_POST_BUILD+=(PATH="${IGTOP}/bin:${IGconf_sys_workdir}/host/bin:${PATH}")
+
+
+# Load layer default settings and append layer to list
+layer_push()
+{
+   msg "Load layer [$1] $2"
+   case "$1" in
+      image)
+         if [[ -s "${IGIMAGE}/meta/$2.yaml" ]] ; then
+            [[ -f "${IGIMAGE}/meta/$2.defaults" ]] && \
+               aggregate_options "meta" "${IGIMAGE}/meta/$2.defaults"
+            ARGS_LAYERS+=('--config' "${IGIMAGE}/meta/$2.yaml")
+            return
+         fi
+         ;& # image layer can pull in core layers, but not vice versa
+
+      main|auto)
+         if [[ -n $EXT_NSMETA && -s "${EXT_NSMETA}/$2.yaml" ]] ; then
+            [[ -f "${EXT_NSMETA}/$2.defaults" ]] && \
+               aggregate_options "meta" "${EXT_NSMETA}/$2.defaults"
+            ARGS_LAYERS+=('--config' "${EXT_NSMETA}/$2.yaml")
+
+         elif [[ -n $EXT_META && -s "${EXT_META}/$2.yaml" ]] ; then
+            [[ -f "${EXT_META}/$2.defaults" ]] && \
+               aggregate_options "meta" "${EXT_META}/$2.defaults"
+            ARGS_LAYERS+=('--config' "${EXT_META}/$2.yaml")
+
+         elif [[ -s "${META}/$2.yaml" ]] ; then
+            [[ -f "${META}/$2.defaults" ]] && \
+               aggregate_options "meta" "${META}/$2.defaults"
+            ARGS_LAYERS+=('--config' "${META}/$2.yaml")
+         else
+            die "Invalid meta layer specifier: $2 (not found)"
+         fi
+         ;;
+      *)
+         die "Invalid layer scope" ;;
+   esac
 }
-image "rootfs.ext4" {
-  ext4 { label = "${KS_ROOTFS_LABEL}" }
-  size = ${ROOT_SIZE_MIB}M
+
+
+ARGS_LAYERS=()
+load_profile() {
+   [[ $# -eq 2 ]] || die "Load profile bad nargs"
+   msg "Load profile $2"
+   [[ -f $2 ]] || die "Invalid profile: $2"
+   while read -r line; do
+      [[ "$line" =~ ^#.*$ ]] && continue
+      [[ "$line" =~ ^$ ]] && continue
+      layer_push "$1" "$line"
+   done < "$2"
 }
-CFGEOF
 
-cp -f "${BOOT_IMG}" "${IMG_DIR}/boot.vfat"
-genimage --rootpath "${ROOTFS}" --tmppath "${TMP_DIR}" --outputpath "${IMG_DIR}" --config "${CFG_AUTO}"
 
-section "Done"
-info "Device : ${KS_DEVICE}"
-info "Profile: ${KS_PROFILE}"
-info "Image  : ${IMG_DIR}/${KS_IMG_NAME}"
-info "Log    : ${LOGFILE}"
+# Assemble meta layers from main profile
+load_profile main "$IGPROFILE"
+
+
+# Add layers from image profile
+if igconf_isset image_profile ; then
+   load_profile image "${IGIMAGE}/profile/${IGconf_image_profile}"
+fi
+
+
+# Auto-selected layers
+if igconf_isy device_ssh_user1 ; then
+   layer_push auto net-misc/openssh-server
+fi
+
+
+# hook execution
+runh()
+{
+   local hookdir=$(dirname "$1")
+   local hook=$(basename "$1")
+   shift 1
+   msg "$hookdir"["$hook"] "$@"
+   env -C $hookdir "${ENV_POST_BUILD[@]}" podman unshare ./"$hook" "$@"
+   ret=$?
+   if [[ $ret -ne 0 ]]
+   then
+      die "Hook Error: ["$hookdir"/"$hook"] ($ret)"
+   fi
+}
+
+
+# pre-build: hooks - common
+runh ${IGTOP_DEVICE}/pre-build.sh
+runh ${IGTOP_IMAGE}/pre-build.sh
+
+
+# pre-build: hooks - image layout then device
+if [ -x ${IGIMAGE}/pre-build.sh ] ; then
+   runh ${IGIMAGE}/pre-build.sh
+fi
+if [ -x ${IGDEVICE}/pre-build.sh ] ; then
+   runh ${IGDEVICE}/pre-build.sh
+fi
+
+
+# Generate rootfs
+[[ $ONLY_IMAGE = 1 ]] && true || rund "$IGTOP" podman unshare bdebstrap \
+   "${ARGS_LAYERS[@]}" \
+   "${ENV_ROOTFS[@]}" \
+   --force \
+   --name "$IGconf_image_name" \
+   --hostname "$IGconf_device_hostname" \
+   --output "$IGconf_sys_outputdir" \
+   --target "$IGconf_sys_target"  \
+   --setup-hook 'bin/runner setup "$@"' \
+   --essential-hook 'bin/runner essential "$@"' \
+   --customize-hook 'bin/runner customize "$@"' \
+   --cleanup-hook 'bin/runner cleanup "$@"'
+
+
+[[ -f "$IGconf_sys_target" ]] && { msg "Exiting as non-directory target complete" ; exit 0 ; }
+
+
+# post-build: apply rootfs overlays - image layout then device
+if [ -d ${IGIMAGE}/device/rootfs-overlay ] ; then
+   run podman unshare rsync -a ${IGIMAGE}/device/rootfs-overlay/ ${IGconf_sys_target}
+fi
+if [ -d ${IGDEVICE}/device/rootfs-overlay ] ; then
+   run podman unshare rsync -a ${IGDEVICE}/device/rootfs-overlay/ ${IGconf_sys_target}
+fi
+
+
+# post-build: hooks - image layout then device
+if [ -x ${IGIMAGE}/post-build.sh ] ; then
+   runh ${IGIMAGE}/post-build.sh ${IGconf_sys_target}
+fi
+if [ -x ${IGDEVICE}/post-build.sh ] ; then
+   runh ${IGDEVICE}/post-build.sh ${IGconf_sys_target}
+fi
+
+
+[[ $ONLY_ROOTFS = 1 ]] && exit $?
+
+
+# pre-image: hooks - device has priority over image layout
+if [ -x ${IGDEVICE}/pre-image.sh ] ; then
+   runh ${IGDEVICE}/pre-image.sh ${IGconf_sys_target} ${IGconf_sys_outputdir}
+elif [ -x ${IGIMAGE}/pre-image.sh ] ; then
+   runh ${IGIMAGE}/pre-image.sh ${IGconf_sys_target} ${IGconf_sys_outputdir}
+else
+   die "no pre-image hook"
+fi
+
+
+# SBOM
+if [ -x ${IGTOP_SBOM}/gen.sh ] ; then
+   runh ${IGTOP_SBOM}/gen.sh ${IGconf_sys_target} ${IGconf_sys_outputdir}
+fi
+
+
+GTMP=$(mktemp -d)
+trap 'rm -rf $GTMP' EXIT
+mkdir -p "$IGconf_sys_deploydir"
+
+
+# Generate image(s)
+for f in "${IGconf_sys_outputdir}"/genimage*.cfg; do
+   [[ -f "$f" ]] || continue
+   run podman unshare env "${ENV_POST_BUILD[@]}" genimage \
+      --rootpath ${IGconf_sys_target} \
+      --tmppath $GTMP \
+      --inputpath ${IGconf_sys_outputdir}   \
+      --outputpath ${IGconf_sys_outputdir} \
+      --loglevel=1 \
+      --config $f | pv -t -F 'Generating image...%t' || die "genimage error"
+done
+
+
+# post-image: hooks - device has priority over image layout
+if [ -x ${IGDEVICE}/post-image.sh ] ; then
+   runh ${IGDEVICE}/post-image.sh $IGconf_sys_deploydir
+elif [ -x ${IGIMAGE}/post-image.sh ] ; then
+   runh ${IGIMAGE}/post-image.sh $IGconf_sys_deploydir
+else
+   runh ${IGTOP_IMAGE}/post-image.sh $IGconf_sys_deploydir
+fi
