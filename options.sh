@@ -10,7 +10,9 @@ export KS_VARIANT="${KS_VARIANT:-apt}"
 
 # Leave empty if you don’t want to force extra packages from base layer
 # (layers can add their own packages cleanly)
-export KS_PACKAGES="${KS_PACKAGES:-}"
+# Minimal base packages (comma-separated). Leave empty to omit the block.
+: "${KS_PACKAGES:=apt,ca-certificates,gnupg,locales,tzdata,netbase}"
+export KS_PACKAGES
 
 export KS_IMG_NAME="${KS_IMG_NAME:-ks-${KS_DEVICE}-${KS_PROFILE}-${KS_SUITE}-${KS_ARCH}.img}"
 export KS_PART_TABLE="${KS_PART_TABLE:-dos}"
