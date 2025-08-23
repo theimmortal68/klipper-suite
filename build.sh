@@ -180,16 +180,8 @@ touch /root/BUILD_OK
 EOSH
 chmod +x "${APPLY}"
 
-# ------------------------- base bdebstrap YAML --------------------------------
-pkg_yaml_items=""
-IFS=',' read -ra _pkgs <<< "${KS_PACKAGES}"
-for p in "${_pkgs[@]}"; do [[ -n "$p" ]] && pkg_yaml_items+="\n      - ${p}"; done
-
-comp_yaml_items=""
-IFS=',' read -ra _comps <<< "${KS_COMPONENTS}"
-for c in "${_comps[@]}"; do [[ -n "$c" ]] && comp_yaml_items+="\n    - ${c}"; done
-[[ -z "${comp_yaml_items}" ]] && comp_yaml_items=$'\n    - main'
-
+# ------------------------- base bdebstrap YAML (robust list printing) ---------
+BDEB_CFG_BASE="${OUT_DIR}/bdebstrap.base.yaml"
 cat > "${BDEB_CFG_BASE}" <<EOF
 ---
 name: ${KS_DEVICE}-${KS_PROFILE}-${KS_SUITE}-${KS_ARCH}
@@ -204,26 +196,29 @@ mmdebstrap:
   suite: ${KS_SUITE}
   architectures:
     - ${KS_ARCH}
-  components:${comp_yaml_items}
+  components:
+$(printf '    - %s\n' ${KS_COMPONENTS//,/ })
   mirrors:
     - ${KS_MIRROR}
   variant: ${KS_VARIANT}
   format: directory
   target: rootfs
-  packages:${pkg_yaml_items}
-
+  packages:
+$(printf '    - %s\n' ${KS_PACKAGES//,/ })
   essential-hooks:
     - echo tzdata tzdata/Areas select "\$KS_TZ_AREA" | chroot \$1 debconf-set-selections
     - echo tzdata tzdata/Zones/\$KS_TZ_AREA select "\$KS_TZ_CITY" | chroot \$1 debconf-set-selections
     - echo locales locales/locales_to_be_generated multiselect "\$KS_LOCALE_GEN" | chroot \$1 debconf-set-selections
     - echo locales locales/default_environment_locale select "\$KS_LOCALE_DEFAULT" | chroot \$1 debconf-set-selections
     - echo keyboard-configuration keyboard-configuration/xkb-keymap select "\$KS_KB_KEYMAP" | chroot \$1 debconf-set-selections
-
   customize-hooks:
     - copy-in ${ROOT}/options.sh /etc/ks/options.sh
     - copy-in ${APPLY} /apply.sh
     - chroot "\$1" bash -eux /apply.sh
 EOF
+
+section "Generated bdebstrap.base.yaml (head)"
+sed -n '1,120p' "${BDEB_CFG_BASE}" || true
 
 # ------------------------- run bdebstrap (merge layers) ----------------------
 section "bdebstrap"
@@ -236,7 +231,6 @@ cmd=(bdebstrap
 # Preseed Raspberry Pi repo key & source before apt runs (setup-hooks)
 if [[ "${KS_ENABLE_RPI_REPO}" == "1" ]]; then
   cmd+=(--setup-hook="copy-in ${ROOT}/${KS_RPI_KEY_FILE} ${KS_RPI_KEY_DST}")
-  # shell quoting: write the source file inside target at setup time
   cmd+=(--setup-hook="sh -c 'mkdir -p \"\$1/etc/apt/sources.list.d\" && printf \"%s\n\" \"deb [arch=${KS_RPI_REPO_ARCH} signed-by=${KS_RPI_KEY_DST}] ${KS_RPI_REPO_URL} ${KS_SUITE} ${KS_RPI_REPO_COMPONENTS}\" > \"\$1${KS_RPI_APT_FILE}\"'")
 fi
 
