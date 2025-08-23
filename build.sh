@@ -110,7 +110,7 @@ __BASENAME="$(basename -- "$INCONFIG")"
 case "$__BASENAME" in
   *.cfg) : ;;
   *) __BASENAME="${__BASENAME}.cfg" ;;
-ESAC
+esac
 
 # Prefer external overlay (-D) if it contains the config
 if [[ -d $EXT_DIR ]]; then
