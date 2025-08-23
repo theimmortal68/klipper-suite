@@ -65,4 +65,3 @@ jobs:
             out/genimage.auto.cfg
           if-no-files-found: error
           retention-days: 14
-```0
