@@ -1,5 +1,6 @@
----
 profiles:
   base:
     - bconf/debian/bookworm.yaml
     - bconf/raspios/repo.yaml
+    - bconf/raspios/firmware.yaml
+    - bconf/raspios/rpi5-kernel.yaml
