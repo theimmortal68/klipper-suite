@@ -7,5 +7,5 @@ device_keyboard_layout="English (US)"
 device_locale1="en_US.UTF-8"
 device_ssh_user1=y
 device_timezone=America/New_York
-device_user1= # default: pi
+device_user1=pi
 device_user1pass=raspberry
