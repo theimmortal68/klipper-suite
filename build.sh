@@ -67,7 +67,7 @@ command -v qemu-aarch64-static >/dev/null 2>&1 || warn "qemu-aarch64-static not 
 : "${KS_RPI_KEY_DST:=/usr/share/keyrings/raspberrypi-archive-stable.gpg}"
 : "${KS_RPI_APT_FILE:=/etc/apt/sources.list.d/raspi.list}"
 
-# Debian archive key (copy in, so the image has it preseeded too)
+# Debian archive key (copy in so the image has it preseeded too)
 : "${KS_ENABLE_DEBIAN_KEY:=1}"
 : "${KS_DEBIAN_KEY_FILE:=keys/debian-archive-keyring.gpg}"
 : "${KS_DEBIAN_KEY_DST:=/usr/share/keyrings/debian-archive-keyring.gpg}"
@@ -77,14 +77,14 @@ OUT_DIR="${ROOT}/${KS_OUT_DIR}"
 ROOTFS="${OUT_DIR}/rootfs"
 LOGFILE="${OUT_DIR}/BUILD_LOG.txt"
 IMG_DIR="${OUT_DIR}/images"
-TMP_DIR="${OUT_DIR}/genimage-tmp"
+TMP_DIR="${OUT_DIR}/genimage-tmp}"
 CFG_AUTO="${OUT_DIR}/genimage.auto.cfg"
 BOOT_IMG="${OUT_DIR}/boot.vfat"
 BDEB_CFG_BASE="${OUT_DIR}/bdebstrap.base.yaml"
 DEV_DIR="${ROOT}/devices/${KS_DEVICE}"
 DEV_LAYERS="${DEV_DIR}/layers.yaml"
 
-sudo rm -rf "${ROOTFS}" "${IMG_DIR}" "${TMP_DIR}" "${BOOT_IMG}" "${BDEB_CFG_BASE}" "${CFG_AUTO}"
+sudo rm -rf "${ROOTFS}" "${IMG_DIR}" "${TMP_DIR}" "${BOOT_IMG}" "${BDEB_CFG_BASE}" "${CFG_AUTO}" || true
 mkdir -p "${OUT_DIR}" "${IMG_DIR}" "${TMP_DIR}"
 
 # mirror console to file; strip ANSI for the saved log if colors are on
@@ -101,32 +101,23 @@ info "Color  : ${KS_COLOR}"
 
 # ------------------------- verify key files if enabled ------------------------
 if [[ "${KS_ENABLE_RPI_REPO}" == "1" ]]; then
-  if [[ ! -f "${ROOT}/${KS_RPI_KEY_FILE}" ]]; then
-    error "Missing RPi repo key file: ${KS_RPI_KEY_FILE} (expected in repo)"
-    exit 1
-  fi
+  [[ -f "${ROOT}/${KS_RPI_KEY_FILE}" ]] || { error "Missing RPi repo key: ${KS_RPI_KEY_FILE}"; exit 1; }
   info "RPi APT repo enabled; key: ${KS_RPI_KEY_FILE}"
 fi
-
 if [[ "${KS_ENABLE_DEBIAN_KEY}" == "1" ]]; then
-  if [[ ! -f "${ROOT}/${KS_DEBIAN_KEY_FILE}" ]]; then
-    error "Missing Debian archive key file: ${KS_DEBIAN_KEY_FILE} (expected in repo)"
-    exit 1
-  fi
+  [[ -f "${ROOT}/${KS_DEBIAN_KEY_FILE}" ]] || { error "Missing Debian archive key: ${KS_DEBIAN_KEY_FILE}"; exit 1; }
   info "Debian archive key seeding enabled; key: ${KS_DEBIAN_KEY_FILE}"
 fi
 
 # ------------------------- collect device/profile layers ----------------------
 LAYER_CFGS=()
 if [[ -f "${DEV_LAYERS}" ]]; then
-  if ! yq -e '.profiles' "${DEV_LAYERS}" >/dev/null; then
-    error "layers.yaml missing 'profiles' key: ${DEV_LAYERS}"; exit 1
-  fi
-  if ! yq -e ".profiles.${KS_PROFILE}" "${DEV_LAYERS}" >/dev/null; then
+  yq -e '.profiles' "${DEV_LAYERS}" >/dev/null || { error "layers.yaml missing 'profiles' key: ${DEV_LAYERS}"; exit 1; }
+  yq -e ".profiles.${KS_PROFILE}" "${DEV_LAYERS}" >/dev/null || {
     error "Profile '${KS_PROFILE}' not defined for device '${KS_DEVICE}'."
     echo "Available: $(yq -r '.profiles | keys | join(", ")' "${DEV_LAYERS}")"
     exit 1
-  fi
+  }
   mapfile -t LAYER_CFGS < <(yq -r ".profiles.${KS_PROFILE}[]?" "${DEV_LAYERS}")
   section "Layers"
   for f in "${LAYER_CFGS[@]}"; do info "$f"; done
@@ -243,15 +234,20 @@ cmd=(bdebstrap
   --output "${OUT_DIR}"
   --force --verbose)
 
-# Preseed Debian archive key inside target (so the image has it)
+# Preseed Debian archive key inside target
 if [[ "${KS_ENABLE_DEBIAN_KEY}" == "1" ]]; then
   cmd+=(--setup-hook="copy-in ${ROOT}/${KS_DEBIAN_KEY_FILE} ${KS_DEBIAN_KEY_DST}")
 fi
 
-# Preseed Raspberry Pi repo key & source before apt runs
+# Preseed Raspberry Pi repo key & source before apt runs (NO redirection into \$1)
 if [[ "${KS_ENABLE_RPI_REPO}" == "1" ]]; then
+  # keyring
   cmd+=(--setup-hook="copy-in ${ROOT}/${KS_RPI_KEY_FILE} ${KS_RPI_KEY_DST}")
-  cmd+=(--setup-hook="sh -c 'mkdir -p \"\$1/etc/apt/sources.list.d\" && printf \"%s\n\" \"deb [arch=${KS_RPI_REPO_ARCH} signed-by=${KS_RPI_KEY_DST}] ${KS_RPI_REPO_URL} ${KS_SUITE} ${KS_RPI_REPO_COMPONENTS}\" > \"\$1${KS_RPI_APT_FILE}\"'")
+  # sources.list entry via copy-in (works for both tar and directory targets)
+  RPI_SOURCES="$(mktemp)"
+  printf 'deb [arch=%s signed-by=%s] %s %s %s\n' \
+    "${KS_RPI_REPO_ARCH}" "${KS_RPI_KEY_DST}" "${KS_RPI_REPO_URL}" "${KS_SUITE}" "${KS_RPI_REPO_COMPONENTS}" > "${RPI_SOURCES}"
+  cmd+=(--setup-hook="copy-in ${RPI_SOURCES} ${KS_RPI_APT_FILE}")
 fi
 
 # Add any device/profile layer configs (-c merges in order)
