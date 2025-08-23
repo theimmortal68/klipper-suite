@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # Build an ARM64 Debian Bookworm image using bdebstrap + genimage,
 # running bdebstrap under `podman unshare` with inline hooks (no bin/runner).
-# Includes color output and preseeded Debian + Raspberry Pi keyrings.
+# Keyrings/sources are handled entirely in YAML (mmdebstrap.keyrings / setup-hooks).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 . "${ROOT}/options.sh"
+
+# Make $KS_TOP available to YAML (for $KS_TOP/keys/... paths)
+export KS_TOP="${ROOT}"
 
 # ------------------------- arg parsing ----------------------------------------
 while [[ $# -gt 0 ]]; do
@@ -58,21 +61,6 @@ if [[ -f "${ROOT}/devices/${KS_DEVICE}/layers.yaml" ]]; then
 fi
 command -v qemu-aarch64-static >/dev/null 2>&1 || warn "qemu-aarch64-static not found; required to cross-build arm64 on x86_64."
 
-# ------------------------- repo/key seeding knobs -----------------------------
-# Raspberry Pi repo (key + source)
-: "${KS_ENABLE_RPI_REPO:=1}"
-: "${KS_RPI_REPO_URL:=http://archive.raspberrypi.org/debian}"
-: "${KS_RPI_REPO_COMPONENTS:=main}"
-: "${KS_RPI_REPO_ARCH:=arm64}"
-: "${KS_RPI_KEY_FILE:=keys/raspberrypi-archive-stable.gpg}"
-: "${KS_RPI_KEY_DST:=/usr/share/keyrings/raspberrypi-archive-stable.gpg}"
-: "${KS_RPI_APT_FILE:=/etc/apt/sources.list.d/raspi.list}"
-
-# Debian archive key (copy into the image too)
-: "${KS_ENABLE_DEBIAN_KEY:=1}"
-: "${KS_DEBIAN_KEY_FILE:=keys/debian-archive-keyring.gpg}"
-: "${KS_DEBIAN_KEY_DST:=/usr/share/keyrings/debian-archive-keyring.gpg}"
-
 # ------------------------- paths & logging ------------------------------------
 OUT_DIR="${ROOT}/${KS_OUT_DIR}"
 ROOTFS="${OUT_DIR}/rootfs"
@@ -100,16 +88,6 @@ info "Device : ${KS_DEVICE}"
 info "Profile: ${KS_PROFILE}"
 info "Color  : ${KS_COLOR}"
 
-# ------------------------- verify key files if enabled ------------------------
-if [[ "${KS_ENABLE_RPI_REPO}" == "1" ]]; then
-  [[ -f "${ROOT}/${KS_RPI_KEY_FILE}" ]] || { error "Missing RPi repo key: ${KS_RPI_KEY_FILE}"; exit 1; }
-  info "RPi repo key present: ${KS_RPI_KEY_FILE}"
-fi
-if [[ "${KS_ENABLE_DEBIAN_KEY}" == "1" ]]; then
-  [[ -f "${ROOT}/${KS_DEBIAN_KEY_FILE}" ]] || { error "Missing Debian key: ${KS_DEBIAN_KEY_FILE}"; exit 1; }
-  info "Debian key present: ${KS_DEBIAN_KEY_FILE}"
-fi
-
 # ------------------------- collect device/profile layers ----------------------
 LAYER_CFGS=()
 if [[ -f "${DEV_LAYERS}" ]]; then
@@ -134,7 +112,7 @@ set -euxo pipefail
 export DEBIAN_FRONTEND=noninteractive
 . /etc/ks/options.sh
 
-# Ensure RPi boot dir exists (Bookworm layout)
+# Ensure RPi boot dir exists (Bookworm layout); harmless on non-RPi.
 mkdir -p /boot/firmware
 
 # Hostname + hosts
@@ -149,7 +127,7 @@ grep -qE "^${KS_LOCALE}" /etc/locale.gen || echo "${KS_LOCALE} UTF-8" >> /etc/lo
 locale-gen
 update-locale LANG="${KS_LOCALE}"
 
-# Minimal RPi boot configs if none provided by packages/layers
+# Minimal boot configs if none provided by packages/layers
 if [ ! -s /boot/firmware/config.txt ]; then
   cat > /boot/firmware/config.txt <<CONF
 [all]
@@ -187,7 +165,7 @@ touch /root/BUILD_OK
 EOSH
 chmod +x "${APPLY}"
 
-# ------------------------- base bdebstrap YAML (robust list printing) ---------
+# ------------------------- base bdebstrap YAML (no keyrings here) ------------
 BDEB_CFG_BASE="${OUT_DIR}/bdebstrap.base.yaml"
 cat > "${BDEB_CFG_BASE}" <<EOF
 ---
@@ -227,7 +205,7 @@ EOF
 section "Generated bdebstrap.base.yaml (head)"
 sed -n '1,120p' "${BDEB_CFG_BASE}" || true
 
-# ------------------------- run bdebstrap (podman unshare; no bin/runner) -----
+# ------------------------- run bdebstrap (podman unshare) ---------------------
 section "bdebstrap (podman unshare)"
 
 cmd=(podman unshare bdebstrap)
@@ -239,7 +217,7 @@ for f in "${LAYER_CFGS[@]}"; do
   cmd+=(-c "${ROOT}/${f}")
 done
 
-# Strongly force directory target regardless of layer YAML
+# Force directory target regardless of layer YAML
 cmd+=(--force --verbose --debug)
 cmd+=(--name "${KS_DEVICE}-${KS_PROFILE}-${KS_SUITE}-${KS_ARCH}")
 cmd+=(--hostname "${KS_HOSTNAME}")
@@ -247,34 +225,7 @@ cmd+=(--output "${OUT_DIR}")
 cmd+=(--target "${ROOTFS}")
 cmd+=(--format dir)
 
-# Make sure the target dirs exist early
-cmd+=(--setup-hook 'mkdir -p "$1/usr/share/keyrings"')
-cmd+=(--setup-hook 'mkdir -p "$1/etc/apt/sources.list.d"')
-
-# Preseed Debian archive key (copy into dir, not a file path)
-if [[ "${KS_ENABLE_DEBIAN_KEY}" == "1" ]]; then
-  cmd+=(--setup-hook "copy-in ${ROOT}/${KS_DEBIAN_KEY_FILE} /usr/share/keyrings/")
-fi
-
-# Preseed Raspberry Pi repo key & source (copy into dirs)
-if [[ "${KS_ENABLE_RPI_REPO}" == "1" ]]; then
-  # keyring -> /usr/share/keyrings/raspberrypi-archive-stable.gpg
-  cmd+=(--setup-hook "copy-in ${ROOT}/${KS_RPI_KEY_FILE} /usr/share/keyrings/")
-
-  # prepare raspi.list with final basename so copy-in preserves it
-  RPI_SOURCES="${OUT_DIR}/raspi.list"
-  printf 'deb [arch=%s signed-by=%s] %s %s %s\n' \
-    "${KS_RPI_REPO_ARCH}" \
-    "${KS_RPI_KEY_DST}" \
-    "${KS_RPI_REPO_URL}" \
-    "${KS_SUITE}" \
-    "${KS_RPI_REPO_COMPONENTS}" > "${RPI_SOURCES}"
-
-  # copy into sources.list.d dir (basename kept as raspi.list)
-  cmd+=(--setup-hook "copy-in ${RPI_SOURCES} /etc/apt/sources.list.d/")
-fi
-
-# Run from repo root so relative paths in --setup/customize hooks resolve
+# Run from repo root so relative paths in hooks resolve
 pushd "${ROOT}" >/dev/null
 set -x
 "${cmd[@]}"
