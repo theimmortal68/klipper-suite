@@ -1,0 +1,49 @@
+name: build-bdebstrap-arm64
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install host deps (bdebstrap/mmdebstrap + qemu + yq + utils)
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bdebstrap mmdebstrap binfmt-support qemu-user-static zstd rsync curl
+          sudo update-binfmts --enable qemu-aarch64 || true
+          # yq (mikefarah) – single static binary
+          YQ_VERSION=v4.44.3
+          sudo curl -L "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" -o /usr/local/bin/yq
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Build (bdebstrap layers)
+        run: |
+          bash ./build.sh
+
+      - name: Package rootfs as tar.zst
+        run: |
+          set -euo pipefail
+          source ./options.sh
+          ROOT="out/${KS_DEVICE}-${KS_SUITE}-${KS_ARCH}/rootfs"
+          sudo tar --numeric-owner -C "${ROOT}" -I 'zstd -19' -cf "out/rootfs-${KS_DEVICE}-${KS_SUITE}-${KS_ARCH}.tar.zst" .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rootfs-${{ github.sha }}-arm64
+          path: |
+            out/rootfs-*.tar.zst
+            out/BUILD_LOG.txt

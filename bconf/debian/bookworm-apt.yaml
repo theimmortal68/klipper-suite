@@ -1,0 +1,30 @@
+---
+name: bookworm-arm64
+mmdebstrap:
+  architectures:
+    - arm64
+  mode: auto
+  variant: apt
+  suite: bookworm
+  mirrors:
+    - deb http://deb.debian.org/debian bookworm main contrib non-free non-free-firmware
+    - deb http://deb.debian.org/debian-security bookworm-security main contrib non-free non-free-firmware
+    - deb http://deb.debian.org/debian bookworm-updates main contrib non-free non-free-firmware
+  aptopts:
+    - APT::Install-Suggests "false"
+    - APT::Install-Recommends "false"
+    - Debug::pkgProblemResolver "1"
+    - Acquire::Retries "3"
+    - Acquire::http::No-Cache "true"
+    - APT::Cache-Limit "100000000"
+    - DPkg::Lock::Timeout "600"
+  dpkgopts:
+    - path-exclude=/usr/share/man/*
+    - path-include=/usr/share/man/man[1-9]/*
+    - path-exclude=/usr/share/locale/*
+    - path-include=/usr/share/locale/locale.alias
+    - path-exclude=/usr/share/doc/*
+    - path-include=/usr/share/doc/*/copyright
+    - path-include=/usr/share/doc/*/changelog.Debian.*
+    - path-exclude=/usr/share/{doc,info,man,omf,help,gnome/help}/*
+    - path-exclude=/usr/share/lintian/*

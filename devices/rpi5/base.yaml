@@ -1,0 +1,3 @@
+---
+layers
+  - bconf/debian/bookworm-apt
