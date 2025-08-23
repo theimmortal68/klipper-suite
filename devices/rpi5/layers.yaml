@@ -5,11 +5,13 @@ profiles:
     - bconf/raspios/firmware.yaml
     - bconf/raspios/rpi5-kernel.yaml
   klipper:
-    - bconf/common/rpi-boot.yaml
-    - bconf/klipper/klipper.yaml
+    - bconf/debian/bookworm.yaml
+    - bconf/raspios/firmware.yaml
+    - bconf/raspios/rpi5-kernel.yaml
   mainsailos:
-    - bconf/common/rpi-boot.yaml
-    - bconf/mainsailos/mainsailos.yaml
-  ratos:
-    - bconf/common/rpi-boot.yaml
-    - bconf/ratos/ratos.yaml
+    - bconf/debian/bookworm.yaml
+    - bconf/raspios/firmware.yaml
+    - bconf/raspios/rpi5-kernel.yaml
+    - bconf/debian/bookworm.yaml
+    - bconf/raspios/firmware.yaml
+    - bconf/raspios/rpi5-kernel.yaml
