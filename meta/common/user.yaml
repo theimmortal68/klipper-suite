@@ -8,6 +8,9 @@ mmdebstrap:
       chroot "$1" sh -eu -c '
         U="${KSconf_device_new_user:?KSconf_device_new_user must be set}"
 
+        # 0) Create the user (will fail if already exists — intentional)
+        adduser --disabled-password --gecos "" "$U"
+
         # 1) (Optional) set password if provided (plaintext or crypt hash)
         if [ -n "${KSconf_device_new_userpass:-}" ]; then
           P="${KSconf_device_new_userpass}"
@@ -20,7 +23,7 @@ mmdebstrap:
         # 2) Lock root account
         usermod -p "*" root
 
-        # 3) Ensure groups exist (will fail if already present — per no-idempotence preference)
+        # 3) Ensure groups exist (will fail if already present — intentional)
         for GRP in input spi i2c gpio render; do
           groupadd -r "$GRP"
         done
@@ -35,6 +38,19 @@ mmdebstrap:
         cat >/etc/sudoers.d/010_"$U"-nopasswd <<EOF
         $U ALL=(ALL) NOPASSWD:ALL
         EOF
+        chmod 0440 /etc/sudoers.d/010_"$U"-nopasswd
+        sh -eu -c "command -v visudo >/dev/null && visudo -cf /etc/sudoers.d/010_\"$U\"-nopasswd || true"
+
+        # 6) PATH normalization for non-root shells
+        install -d -m 0755 /etc/profile.d
+        cat >/etc/profile.d/01local.sh <<'"'"'SH'"'"'
+        #!/bin/sh
+        if [ "$(id -u)" -ne 0 ]; then
+          PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games
+        fi
+        SH
+        chmod 0644 /etc/profile.d/01local.sh
+      '        EOF
         chmod 0440 /etc/sudoers.d/010_"$U"-nopasswd
         sh -eu -c "command -v visudo >/dev/null && visudo -cf /etc/sudoers.d/010_\"$U\"-nopasswd || true"
 
