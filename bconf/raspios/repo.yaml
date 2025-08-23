@@ -2,15 +2,13 @@
 ---
 name: raspi-repo
 mmdebstrap:
-  # Put the key inside the target rootfs before customize hooks run apt-get update.
   setup-hooks:
-    - ls -la $1/usr/share/keyrings
-    - mkdir -p $1/usr/share/keyrings
-    - copy-in ${KS_TOP}/keys/raspberrypi-archive-stable.gpg /usr/share/keyrings/raspberrypi-archive-stable.gpg
-    - chmod 0644 $1/usr/share/keyrings/raspberrypi-archive-stable.gpg
+    # - mkdir -p $1/usr/share/keyrings
+    # - copy-in ${KS_TOP}/keys/raspberrypi-archive-stable.gpg /usr/share/keyrings/raspberrypi-archive-stable.gpg
+    # - chmod 0644 $1/usr/share/keyrings/raspberrypi-archive-stable.gpg
 
   # Raspberry Pi APT source (arm64)
   mirrors:
-    - deb [arch=arm64 signed-by=/usr/share/keyrings/raspberrypi-archive-stable.gpg] http://archive.raspberrypi.org/debian bookworm main
+    - deb [arch=arm64 signed-by=${KS_TOP}/keys/raspberrypi-archive-stable.gpg] http://archive.raspberrypi.org/debian bookworm main
   packages:
     - raspberrypi-archive-keyring
