@@ -33,6 +33,11 @@ mmdebstrap:
   aptopts:
     - APT::Install-Suggests "false"
     - APT::Install-Recommends "false"
+    - Debug::pkgProblemResolver "1"
+    - Acquire::Retries "3"
+    - Acquire::http::No-Cache "true"
+    - APT::Cache-Limit "100000000"
+    - DPkg::Lock::Timeout "600"
   dpkgopts:
     - path-exclude=/usr/share/man/*
     - path-include=/usr/share/man/man[1-9]/*
