@@ -1,5 +1,6 @@
 # Minimal system with v8 kernel, apt, rpi utils and wired networking
 
+common/debug-env
 common/base
 common/network
 common/user
