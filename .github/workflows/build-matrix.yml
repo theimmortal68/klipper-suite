@@ -189,7 +189,8 @@ jobs:
         run: |
           set -euxo pipefail
           chmod +x build.sh
-          ./build.sh --in "options={'config':'${{ matrix.config }}'}"
+          CFG="${{ matrix.config }}"
+          ./build.sh --in "options={'config':'${CFG}'}"
 
       - name: Collect artifacts (${{ matrix.device }} | ${{ matrix.profile }})
         if: always()
