@@ -1,23 +1,15 @@
 ---
 name: rpi-repo
 mmdebstrap:
-  mirror: http://deb.debian.org/debian
-  variant: apt
-  packages: []
+  mirrors:
+    - deb http://archive.raspberrypi.com/debian bookworm main
+  packages:
+    - raspberrypi-archive-keyring
   customize-hooks:
-    - >
-      chroot "$1" sh -eu -c '
-        set -x
-        install -d -m 0755 /usr/share/keyrings
-        if ! [ -s /usr/share/keyrings/raspberrypi-archive.gpg ]; then
-          wget -qO /usr/share/keyrings/raspberrypi-archive.gpg https://archive.raspberrypi.org/debian/raspberrypi.gpg.key || true
-        fi
-        echo "deb [signed-by=/usr/share/keyrings/raspberrypi-archive.gpg] http://archive.raspberrypi.com/debian ${KS_SUITE} main" > /etc/apt/sources.list.d/raspi.list
-        mkdir -p /etc/apt/preferences.d
-        cat > /etc/apt/preferences.d/99-raspi-priority <<PREF
-        Package: *
-        Pin: origin archive.raspberrypi.com
-        Pin-Priority: 700
-        PREF
-        apt-get update || true
-      '
+    - test -f $1/usr/share/keyrings/raspberrypi-archive-keyring.gpg || false
+    - mkdir -p $1/etc/apt/sources.list.d
+    - |-
+      cat <<- EOF > $1/etc/apt/sources.list.d/raspberrypi.list
+      deb [signed-by=/usr/share/keyrings/raspberrypi-archive-keyring.gpg] http://archive.raspberrypi.com/debian bookworm main
+      EOF
+    - sed -i '/archive\.raspberrypi\.com/d' $1/etc/apt/sources.list

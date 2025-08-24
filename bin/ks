@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+HERE="$(readlink -f "$(dirname "$0")")"
+ROOT="$(readlink -f "${HERE}/..")"
+
+log() { printf "[ks] %s\n" "$*" >&2; }
+
+# Read simple INI values (no external tools)
+ini_get() {
+  # $1=file $2=section $3=key
+  awk -v s="[$2]" -v k="$3" '
+    $0==s { sect=1; next }
+    /^\[/ { sect=0 }
+    sect && $1 ~ "^"k"=" {
+      sub("^"k"=","",$0); print $0; exit
+    }
+  ' "$1" 2>/dev/null | sed "s|\${KS_SUITE}|${KS_SUITE:-}|g"
+}
+
+ensure_dir() { mkdir -p "$1"; }
+
+# Rootfs builder
+rootfs() {
+  local cfg="$1"
+  [ -f "$cfg" ] || { echo "cfg not found: $cfg" >&2; exit 2; }
+
+  # Resolve suite/name/class
+  [ -f "${ROOT}/ks_options" ] && . "${ROOT}/ks_options" || :
+  local suite name dclass
+  suite="$(ini_get "$cfg" global suite)"; suite="${suite:-${KS_SUITE:-bookworm}}"
+  name="$(ini_get "$cfg" image name)"; name="${name:-deb-arm64-min}"
+  dclass="$(ini_get "$cfg" device class)"; dclass="${dclass:-generic}"
+
+  export KS_SUITE="$suite"
+  log "suite=${suite} name=${name} class=${dclass}"
+
+  local work="${ROOT}/work"
+  local outdir="${work}/rootfs-${name}"
+  ensure_dir "$outdir"
+
+  # Base mirror and keyring
+  local MIRROR="http://deb.debian.org/debian"
+  local KEYRING=
+  if [ -f "${ROOT}/keydir/debian-archive-keyring.gpg" ]; then
+    KEYRING="--keyring=${ROOT}/keydir/debian-archive-keyring.gpg"
+  fi
+
+  # Build minimal rootfs
+  log "running mmdebstrap..."
+  sudo mmdebstrap \
+    --variant=apt \
+    --components="main contrib non-free non-free-firmware" \
+    --include="ca-certificates,sudo,less,net-tools,iproute2,isc-dhcp-client,vim-tiny" \
+    --aptopt='Apt::Install-Recommends "false";' \
+    ${KEYRING:+$KEYRING} \
+    "$suite" "$outdir" "$MIRROR"
+
+  case "$dclass" in
+    pi5|pi4|cm4|cm5|zero2w)
+      log "provision Raspberry Pi repo, kernel, firmware, userland"
+      sudo chroot "$outdir" /bin/sh -eu -c '
+        set -x
+        export DEBIAN_FRONTEND=noninteractive
+        install -d -m 0755 /usr/share/keyrings
+        if ! [ -s /usr/share/keyrings/raspberrypi-archive.gpg ]; then
+          wget -qO /usr/share/keyrings/raspberrypi-archive.gpg https://archive.raspberrypi.org/debian/raspberrypi.gpg.key || true
+        fi
+        echo "deb [signed-by=/usr/share/keyrings/raspberrypi-archive.gpg] http://archive.raspberrypi.com/debian '"$suite"' main" > /etc/apt/sources.list.d/raspi.list
+        apt-get update || true
+        DEBIAN_FRONTEND=noninteractive apt-get -y purge linux-image-arm64 linux-image-arm64-16k linux-image-arm64-unsigned linux-headers-arm64 || true
+        apt-get -y install linux-image-rpi-2712 raspberrypi-bootloader libraspberrypi-bin libraspberrypi0 rpi-eeprom firmware-brcm80211 || true
+
+        # Camera stack for Pi5: ustreamer + libcamera + crowsnest
+        apt-get -y install git make gcc ca-certificates ffmpeg || true
+        apt-get -y install libcamera0 libcamera-apps || apt-get -y install libcamera0 libcamera-tools || true
+        if ! apt-get -y install ustreamer; then
+          apt-get -y install build-essential libevent-dev libjpeg-dev libbsd-dev pkg-config uuid-dev || true
+          tmp=$(mktemp -d); cd "$tmp"; git clone --depth=1 https://github.com/pikvm/ustreamer.git
+          make -C ustreamer && install -Dm755 ustreamer/ustreamer /usr/local/bin/ustreamer
+          cd / && rm -rf "$tmp"
+        fi
+        if ! command -v crowsnest >/dev/null 2>&1; then
+          tmp=$(mktemp -d); cd "$tmp"; git clone https://github.com/mainsail-crew/crowsnest.git
+          cd crowsnest && make install
+          cd / && rm -rf "$tmp"
+        fi
+        install -d -m 0755 /etc/crowsnest
+        [ -s /etc/crowsnest/crowsnest.conf ] || cat > /etc/crowsnest/crowsnest.conf <<EOF
+[crowsnest]
+log_level: quiet
+[cam main]
+mode: ustreamer
+device: /dev/video0
+EOF
+      '
+      ;;
+    opi5max)
+      log "provision Armbian repo and extlinux"
+      sudo chroot "$outdir" /bin/sh -eu -c '
+        set -x
+        export DEBIAN_FRONTEND=noninteractive
+        install -d -m 0755 /usr/share/keyrings
+        if ! [ -s /usr/share/keyrings/armbian.gpg ]; then
+          wget -qO /usr/share/keyrings/armbian.gpg https://apt.armbian.com/armbian.key || true
+        fi
+        echo "deb [signed-by=/usr/share/keyrings/armbian.gpg] http://apt.armbian.com/ '"$suite"' main utils desktop" > /etc/apt/sources.list.d/armbian.list
+        apt-get update || true
+        apt-get -y install u-boot-tools || true
+        mkdir -p /boot/extlinux
+        cat > /boot/extlinux/extlinux.conf <<EOF
+timeout 1
+default Debian
+label Debian
+  kernel /vmlinuz
+  append root=PARTUUID=\${ROOT_PARTUUID} rw console=ttyS2,1500000n8
+  initrd /initrd.img
+#  FDT /usr/lib/linux-image-*/rockchip/rk3588-orangepi-5-max.dtb
+EOF
+      '
+      ;;
+    *)
+      log "generic device class; no extra provisioning"
+      ;;
+  esac
+
+  sudo chroot "$outdir" /bin/sh -eu -c 'echo "proc /proc proc defaults 0 0" > /etc/fstab'
+  date -u +"%Y-%m-%dT%H:%M:%SZ" | sudo tee "${outdir}/.rootfs-built" >/dev/null
+  log "rootfs at ${outdir}"
+}
+
+# Transitional image: tar the rootfs
+image() {
+  local outdir="$1" deploy="$2"
+  [ -d "$outdir" ] || { echo "image: rootfs dir not found: $outdir" >&2; exit 2; }
+  mkdir -p "$deploy"
+  local tar="${deploy}/rootfs.tar.gz"
+  log "creating ${tar}"
+  sudo tar -C "$outdir" -czf "$tar" .
+  log "done"
+}
+
+case "${1:-}" in
+  rootfs) shift; rootfs "$@";;
+  image)  shift; image "$@";;
+  *) echo "Usage: ks {rootfs <config>|image <rootfs_dir> <deploy_dir>}" >&2; exit 2;;
+esac

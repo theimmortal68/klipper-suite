@@ -11,139 +11,49 @@ on:
         description: "Kernel flavor (mainline, mainline-backports, vendor)"
         required: true
         default: "mainline"
-      stage:
-        description: "Staged rollout (0=baseline, 1=RPi repo, 2=RPi kernels, 3=camera)"
-        required: true
-        default: "0"
-      devices:
-        description: "Comma/space-separated device list (pi5, pi4, cm4, cm5, zero2w, opi5max)"
-        required: false
-        default: "pi5"
-      profiles:
-        description: "Comma/space-separated profiles to build (base, mainsailos, ratos)"
-        required: false
-        default: "base"
-      publish_release:
-        description: "Create a prerelease (nightly) from artifacts"
-        required: false
-        default: "false"
 
 jobs:
-  generate-matrix:
-    runs-on: ubuntu-24.04
-    outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
-    steps:
-      - name: Install jq (for matrix generation)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq
-      - name: Compute matrix from inputs
-        id: set-matrix
-        run: |
-          set -eu
-          DEVICES="${{ github.event.inputs.devices || 'pi5, pi4, cm4, cm5, zero2w, opi5max' }}"
-          PROFILES="${{ github.event.inputs.profiles || 'base' }}"
-          readarray -t D_ARR < <(echo "$DEVICES" | tr ', ' '\n' | sed '/^$/d' | tr '[:upper:]' '[:lower:]')
-          readarray -t P_ARR < <(echo "$PROFILES" | tr ', ' '\n' | sed '/^$/d' | tr '[:upper:]' '[:lower:]')
-          map_cfg() {
-            case "$1" in
-              pi5) echo "config/pi5.cfg" ;;
-              pi4) echo "config/pi4.cfg" ;;
-              cm4) echo "config/cm4.cfg" ;;
-              cm5) echo "config/cm5.cfg" ;;
-              zero2w) echo "config/zero2w.cfg" ;;
-              opi5max) echo "config/opi5max.cfg" ;;
-              *) echo "" ;;
-            esac
-          }
-          json='{"include":['
-          first=1
-          for d in "${D_ARR[@]}"; do
-            cfg="$(map_cfg "$d")"
-            [ -n "$cfg" ] || continue
-            for p in "${P_ARR[@]}"; do
-              item="$(jq -cn --arg device "$d" --arg config "$cfg" --arg profile "$p" '{device:$device, config:$config, profile:$profile}')"
-              if [ $first -eq 1 ]; then json="$json$item"; first=0; else json="$json,$item"; fi
-            done
-          done
-          json="$json]}"
-          echo "matrix=$json" >> "$GITHUB_OUTPUT"
-
   build:
-    needs: generate-matrix
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    env:
-      DEBIAN_FRONTEND: noninteractive
-      APT_LISTCHANGES_FRONTEND: none
-      NEEDRESTART_MODE: a
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+      matrix:
+        include:
+          - device: pi5
+            config: config/pi5.cfg
+          - device: pi4
+            config: config/pi4.cfg
+          - device: zero2w
+            config: config/zero2w.cfg
+          - device: cm4
+            config: config/cm4.cfg
+          - device: cm5
+            config: config/cm5.cfg
+          - device: opi5max
+            config: config/opi5max.cfg
 
     steps:
-      - name: Maximize build disk space
-        uses: easimon/maximize-build-space@v1
-        with:
-          root-reserve-mb: 512
-          swap-size-mb: 4096
-          remove-dotnet: 'true'
-          remove-android: 'true'
-          remove-haskell: 'true'
-      - name: Fix workspace ownership
-        run: sudo chown -R "$USER":"$USER" "$GITHUB_WORKSPACE"
-      - name: Extra cleanup
-        run: |
-          set -eux
-          if [ -d /home/runner/work/_temp/codeql ]; then
-            sudo rm -rf /home/runner/work/_temp/codeql || true
-          fi
-          sudo rm -rf /opt/hostedtoolcache/CodeQL || true
-          if command -v docker >/dev/null 2>&1; then
-            sudo docker system prune -af --volumes || true
-          fi
-          sudo rm -rf /opt/hostedtoolcache/* || true
-          sudo rm -rf /home/linuxbrew /home/runner/.linuxbrew || true
-          sudo rm -rf /usr/local/lib/android || true
-          sudo rm -rf /usr/local/share/powershell || true
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Install host dependencies via ./install_deps.sh
+
+      - name: Install build dependencies
         run: |
-          set -euxo pipefail
-          sudo apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=600 update
-          chmod +x ./install_deps.sh
-          sudo -E ./install_deps.sh
-      - name: Enable cross-arch emulation (aarch64)
-        run: |
-          set -eux
-          sudo apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=600 update
-          sudo apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=600 install -y qemu-user-static binfmt-support
-          sudo update-binfmts --enable qemu-aarch64 || true
-          update-binfmts --display | sed -n '/qemu-aarch64/I,+10p' || true
-      - name: Provide Debian archive signing keys for mmdebstrap
-        run: |
-          set -eux
-          sudo apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=600 update
-          sudo apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=600 install -y debian-archive-keyring
-          mkdir -p keydir
-          cp /usr/share/keyrings/debian-archive-keyring.gpg keydir/
-          ls -l keydir
+          sudo apt-get update
+          sudo apt-get install -y \
+            mmdebstrap qemu-user-static dosfstools e2fsprogs parted gdisk \
+            genimage u-boot-tools squashfs-tools xz-utils unzip wget curl jq bc \
+            kpartx kmod rsync file
+
       - name: Show inputs
         run: |
-          echo "Suite:            ${{ github.event.inputs.suite || 'bookworm' }}"
-          echo "Kernel flavor:    ${{ github.event.inputs.kernel_flavor || 'mainline' }}"
-          echo "Stage:            ${{ github.event.inputs.stage || '0' }}"
-          echo "Device:           ${{ matrix.device }}"
-          echo "Profile group:    ${{ matrix.profile }}"
-      - name: "Guard: ban linux-image-arm64 on Pi devices (Stage>=2)"
-        if: ${{ (matrix.device == 'pi5' || matrix.device == 'pi4' || matrix.device == 'cm4' || matrix.device == 'cm5' || matrix.device == 'zero2w') && (github.event.inputs.stage != '' && fromJSON(github.event.inputs.stage) >= 2) }}
+          echo "Suite: ${{ github.event.inputs.suite || 'bookworm' }}"
+          echo "Kernel flavor: ${{ github.event.inputs.kernel_flavor || 'mainline' }}"
+
+      - name: Guard
+        if: ${{ matrix.device == 'pi5' || matrix.device == 'pi4' || matrix.device == 'cm4' || matrix.device == 'cm5' || matrix.device == 'zero2w' }}
         run: |
           set -euo pipefail
+          # Only scan Pi-related layers (not other boards like OPi)
           paths=(meta/rpi meta/boards/pi4.yaml meta/boards/pi5.yaml meta/boards/cm4.yaml meta/boards/cm5.yaml meta/boards/zero2w.yaml)
           for p in "${paths[@]}"; do
             [ -e "$p" ] || continue
@@ -152,65 +62,35 @@ jobs:
               exit 1
             fi
           done
-      - name: Patch config to select profile group
-        run: |
-          set -eu
-          cfg="${{ matrix.config }}"
-          prof="${{ matrix.profile }}"
-          if [ -f "$cfg" ]; then
-            echo "Patching $cfg to use profile group '$prof'"
-            sed -i -E "s|^\s*profile\s*=\s*debian/\$\{KS_SUITE\}/.*$|profile=debian/\${KS_SUITE}/$prof|" "$cfg" || true
-          fi
-          echo "Resulting profile line:"
-          grep -E '^\s*profile\s*=' "$cfg" || true
-      - name: Build (${{ matrix.device }} | ${{ matrix.profile }})
+
+      - name: Build (${{ matrix.device }})
         env:
           KS_SUITE: ${{ github.event.inputs.suite || 'bookworm' }}
           KS_KERNEL_FLAVOR: ${{ github.event.inputs.kernel_flavor || 'mainline' }}
-          KS_STAGE: ${{ github.event.inputs.stage || '0' }}
-          KS_PROFILE_GROUP: ${{ matrix.profile }}
         run: |
           set -euxo pipefail
           chmod +x build.sh
-          CFG="${{ matrix.config }}"
-          ./build.sh --in "options={'config':'${CFG}'}"
-      - name: Collect artifacts (${{ matrix.device }} | ${{ matrix.profile }})
+          ./build.sh --in "options={'config':'${{ matrix.config }}'}"
+
+      - name: Collect artifacts (${{ matrix.device }})
         if: always()
         run: |
-          mkdir -p out/${{ matrix.device }}_${{ matrix.profile }}
-          find work -maxdepth 3 -type f             \( -name '*.img' -o -name '*.img.zst' -o -name '*.img.xz' -o -name '*.zip' -o -name '*.tar.gz' -o -name '*.xz' \)             -exec cp -v {} out/${{ matrix.device }}_${{ matrix.profile }}/ \; || true
-          find work -type f -name '*.log' -exec cp -v --parents {} out/${{ matrix.device }}_${{ matrix.profile }} \; || true
-          if [ -z "$(ls -A out/${{ matrix.device }}_${{ matrix.profile }} 2>/dev/null || true)" ]; then
-            tar -C work -czf out/${{ matrix.device }}_${{ matrix.profile }}/work-tree.tar.gz . || true
+          mkdir -p out/${{ matrix.device }}
+          # Collect likely images or archives from work/
+          find work -maxdepth 3 -type f \
+            \( -name '*.img' -o -name '*.img.zst' -o -name '*.img.xz' -o -name '*.zip' -o -name '*.tar.gz' -o -name '*.xz' \) \
+            -exec cp -v {} out/${{ matrix.device }}/ \; || true
+          # Include logs
+          find work -type f -name '*.log' -exec cp -v --parents {} out/${{ matrix.device }} \; || true
+          # Fallback: snapshot work tree if nothing else found
+          if [ -z "$(ls -A out/${{ matrix.device }} 2>/dev/null || true)" ]; then
+            tar -C work -czf out/${{ matrix.device }}/work-tree.tar.gz . || true
           fi
-      - name: Upload artifacts (${{ matrix.device }} | ${{ matrix.profile }})
+
+      - name: Upload artifacts (${{ matrix.device }})
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: build-${{ matrix.device }}-${{ matrix.profile }}-${{ github.event.inputs.suite || 'bookworm' }}
-          path: out/${{ matrix.device }}_${{ matrix.profile }}
+          name: build-${{ matrix.device }}-${{ github.event.inputs.suite || 'bookworm' }}
+          path: out/${{ matrix.device }}
           if-no-files-found: warn
-
-  publish:
-    if: ${{ github.event.inputs.publish_release == 'true' }}
-    needs: build
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: build-*
-          path: ci_out
-          merge-multiple: true
-      - name: Publish nightly
-        uses: ncipollo/release-action@v1
-        with:
-          tag: nightly-${{ github.run_id }}
-          name: Nightly ${{ github.run_id }}
-          prerelease: true
-          allowUpdates: true
-          replacesArtifacts: true
-          artifacts: |
-            ci_out/**
