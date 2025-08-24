@@ -9,6 +9,8 @@ dependencies_check "${KSTOP}/depends" || exit 1
 source "${KSTOP}/scripts/common"
 source "${KSTOP}/scripts/core"
 source "${KSTOP}/bin/ksconf"
+# after: source "${KSTOP}/bin/ksconf"
+[ -f "${KSTOP}/scripts/shim_helpers.sh" ] && . "${KSTOP}/scripts/shim_helpers.sh"
 
 
 # Defaults
