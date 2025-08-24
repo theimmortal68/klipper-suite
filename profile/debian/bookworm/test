@@ -5,3 +5,5 @@ common/base
 common/network
 common/user
 rpi/repo
+rpi/firmware
+rpi/utils

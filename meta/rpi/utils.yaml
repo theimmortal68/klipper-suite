@@ -1,0 +1,40 @@
+---
+name: rpi-utils
+mmdebstrap:
+  variant: apt
+  packages:
+    - raspi-config
+    - rpi-eeprom
+    - raspi-utils
+    - raspi-utils-core
+    - raspi-utils-dt
+    - flashrom
+    - i2c-tools
+    - dphys-swapfile
+  customize-hooks:
+    - |-
+      chroot "$1" /bin/sh -eu -c '
+        # --- Enable i2c-dev (modern, drop-in style) ---
+        install -d -m 0755 /etc/modules-load.d
+        printf "%s\n" "i2c-dev" > /etc/modules-load.d/i2c.conf
+
+        # --- dphys-swapfile "drop-in" via diversion ---
+        # dphys-swapfile has no conf.d; divert vendor file and install a managed wrapper
+        if dpkg -s dphys-swapfile >/dev/null 2>&1; then
+          # Add diversion if not already present; rename moves the current file aside
+          dpkg-divert --quiet --local --add --rename --divert /etc/dphys-swapfile.distrib /etc/dphys-swapfile
+          # Write our managed config
+          printf "%s\n" \
+            "# Managed by image build. Local overrides first:" \
+            "CONF_SWAPSIZE=1024" \
+            "CONF_MAXSWAP=4096" \
+            "" \
+            "# Source the vendor defaults (diverted by dpkg-divert) so we inherit future sane defaults." \
+            "# Variables set above remain in effect unless the vendor file explicitly overrides them." \
+            "if [ -r /etc/dphys-swapfile.distrib ]; then" \
+            "  . /etc/dphys-swapfile.distrib" \
+            "fi" \
+            > /etc/dphys-swapfile
+          chmod 0644 /etc/dphys-swapfile
+        fi
+      '
