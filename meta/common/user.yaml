@@ -6,19 +6,12 @@ mmdebstrap:
   customize-hooks:
     - >
       chroot "$1" sh -eu -c '
-        echo "[user hook] ==== FULL ENV DUMP (sorted) ====" >&2
-        env | sort >&2
-        echo "==========================================" >&2
 
-        # Decide device user (first non-empty wins) + log it
+        # Decide device user (must be provided) + log it
         if [ -n "${KSconf_device_new_user:-}" ]; then
           U="$KSconf_device_new_user"; SRC=KSconf_device_new_user
-        elif [ -n "${KSconf_device_user:-}" ]; then
-          U="$KSconf_device_user"; SRC=KSconf_device_user
-        elif [ -n "${IGconf_device_user1:-}" ]; then
-          U="$IGconf_device_user1"; SRC=IGconf_device_user1
         else
-          echo "[user hook] ERROR: no user variable set (KSconf_device_new_user | KSconf_device_user | IGconf_device_user1)" >&2
+          echo "[user hook] ERROR: KSconf_device_new_user is not set" >&2
           exit 1
         fi
         echo "[user hook] Using $SRC='\''$U'\''" >&2
