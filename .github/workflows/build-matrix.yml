@@ -27,6 +27,8 @@ on:
         description: "Create a prerelease (nightly) from artifacts"
         required: false
         default: "false"
+  push:
+    branches: [ master ]
 
 jobs:
   generate-matrix:
@@ -44,7 +46,6 @@ jobs:
           set -eu
           DEVICES="${{ github.event.inputs.devices || 'pi5, pi4, cm4, cm5, zero2w, opi5max' }}"
           PROFILES="${{ github.event.inputs.profiles || 'base' }}"
-          # Split on commas or spaces, normalize lowercase, drop empties
           readarray -t D_ARR < <(echo "$DEVICES" | tr ', ' '\n' | sed '/^$/d' | tr '[:upper:]' '[:lower:]')
           readarray -t P_ARR < <(echo "$PROFILES" | tr ', ' '\n' | sed '/^$/d' | tr '[:upper:]' '[:lower:]')
           map_cfg() {
@@ -85,7 +86,6 @@ jobs:
       matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
 
     steps:
-      # Expand usable disk (merge / and /mnt; add swap; remove big preinstalls)
       - name: Maximize build disk space
         uses: easimon/maximize-build-space@v1
         with:
@@ -94,12 +94,9 @@ jobs:
           remove-dotnet: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
-
-      # ensure the newly mounted workspace is writable by 'runner'
       - name: Fix workspace ownership
         run: sudo chown -R "$USER":"$USER" "$GITHUB_WORKSPACE"
-
-      - name: Extra cleanup (CodeQL, Docker images, cached tools, Homebrew)
+      - name: Extra cleanup
         run: |
           set -eux
           if [ -d /home/runner/work/_temp/codeql ]; then
@@ -109,26 +106,20 @@ jobs:
           if command -v docker >/dev/null 2>&1; then
             sudo docker system prune -af --volumes || true
           fi
-          # Hosted toolcache (old SDKs/toolchains)
           sudo rm -rf /opt/hostedtoolcache/* || true
-          # Homebrew
           sudo rm -rf /home/linuxbrew /home/runner/.linuxbrew || true
-          # Misc caches
           sudo rm -rf /usr/local/lib/android || true
           sudo rm -rf /usr/local/share/powershell || true
-
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: Install host dependencies via ./install_deps.sh
         run: |
           set -euxo pipefail
           sudo apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=600 update
           chmod +x ./install_deps.sh
           sudo -E ./install_deps.sh
-
       - name: Enable cross-arch emulation (aarch64)
         run: |
           set -eux
@@ -136,7 +127,6 @@ jobs:
           sudo apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=600 install -y qemu-user-static binfmt-support
           sudo update-binfmts --enable qemu-aarch64 || true
           update-binfmts --display | sed -n '/qemu-aarch64/I,+10p' || true
-
       - name: Provide Debian archive signing keys for mmdebstrap
         run: |
           set -eux
@@ -145,7 +135,6 @@ jobs:
           mkdir -p keydir
           cp /usr/share/keyrings/debian-archive-keyring.gpg keydir/
           ls -l keydir
-
       - name: Show inputs
         run: |
           echo "Suite:            ${{ github.event.inputs.suite || 'bookworm' }}"
@@ -153,7 +142,6 @@ jobs:
           echo "Stage:            ${{ github.event.inputs.stage || '0' }}"
           echo "Device:           ${{ matrix.device }}"
           echo "Profile group:    ${{ matrix.profile }}"
-
       - name: "Guard: ban linux-image-arm64 on Pi devices (Stage>=2)"
         if: ${{ (matrix.device == 'pi5' || matrix.device == 'pi4' || matrix.device == 'cm4' || matrix.device == 'cm5' || matrix.device == 'zero2w') && (github.event.inputs.stage != '' && fromJSON(github.event.inputs.stage) >= 2) }}
         run: |
@@ -166,7 +154,6 @@ jobs:
               exit 1
             fi
           done
-
       - name: Patch config to select profile group
         run: |
           set -eu
@@ -174,12 +161,10 @@ jobs:
           prof="${{ matrix.profile }}"
           if [ -f "$cfg" ]; then
             echo "Patching $cfg to use profile group '$prof'"
-            # Replace any existing profile=debian/${KS_SUITE}/... with selected group
             sed -i -E "s|^\s*profile\s*=\s*debian/\$\{KS_SUITE\}/.*$|profile=debian/\${KS_SUITE}/$prof|" "$cfg" || true
           fi
           echo "Resulting profile line:"
           grep -E '^\s*profile\s*=' "$cfg" || true
-
       - name: Build (${{ matrix.device }} | ${{ matrix.profile }})
         env:
           KS_SUITE: ${{ github.event.inputs.suite || 'bookworm' }}
@@ -191,7 +176,6 @@ jobs:
           chmod +x build.sh
           CFG="${{ matrix.config }}"
           ./build.sh --in "options={'config':'${CFG}'}"
-
       - name: Collect artifacts (${{ matrix.device }} | ${{ matrix.profile }})
         if: always()
         run: |
@@ -201,7 +185,6 @@ jobs:
           if [ -z "$(ls -A out/${{ matrix.device }}_${{ matrix.profile }} 2>/dev/null || true)" ]; then
             tar -C work -czf out/${{ matrix.device }}_${{ matrix.profile }}/work-tree.tar.gz . || true
           fi
-
       - name: Upload artifacts (${{ matrix.device }} | ${{ matrix.profile }})
         if: always()
         uses: actions/upload-artifact@v4
@@ -223,7 +206,6 @@ jobs:
           pattern: build-*
           path: ci_out
           merge-multiple: true
-
       - name: Publish nightly
         uses: ncipollo/release-action@v1
         with:

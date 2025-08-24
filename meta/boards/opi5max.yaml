@@ -1,0 +1,45 @@
+---
+name: opi5max
+mmdebstrap:
+  variant: apt
+  packages:
+    - ca-certificates
+    - sudo
+    - u-boot-tools
+    - wget
+  customize-hooks:
+    - >-
+      if [ -n "${KS_VENDOR_KERNEL_DIR:-}" ] && [ -d "${KS_VENDOR_KERNEL_DIR}" ]; then
+        mkdir -p "$1/opt/vendor-kernel"
+        cp -av "${KS_VENDOR_KERNEL_DIR}/." "$1/opt/vendor-kernel/"
+      fi
+    - >-
+      chroot "$1" /bin/sh -eu -c '
+        install -d -m 0755 /usr/share/keyrings
+        if ! [ -s /usr/share/keyrings/armbian.gpg ]; then
+          wget -qO /usr/share/keyrings/armbian.gpg https://apt.armbian.com/armbian.key || true
+        fi
+        echo "deb [signed-by=/usr/share/keyrings/armbian.gpg] http://apt.armbian.com/ ${KS_SUITE} main utils desktop" > /etc/apt/sources.list.d/armbian.list
+        case "${KS_KERNEL_FLAVOR:-mainline}" in
+          mainline) ;;
+          mainline-backports)
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get -y -t ${KS_SUITE}-backports install linux-image-arm64 ;;
+          vendor)
+            if [ -d /opt/vendor-kernel ] && ls /opt/vendor-kernel/*.deb >/dev/null 2>&1 ; then
+              dpkg -i /opt/vendor-kernel/*.deb || (apt-get -y -f install && dpkg -i /opt/vendor-kernel/*.deb)
+            fi ;;
+        esac
+        BOOT_CONSOLE="${KS_BOOT_CONSOLE:-ttyS2,1500000n8}"
+        FDT=$(ls -1 /usr/lib/linux-image-*/rockchip/rk3588-orangepi-5-max.dtb 2>/dev/null | head -n1 || true)
+        mkdir -p /boot/extlinux
+        {
+          echo "timeout 1"
+          echo "default Debian"
+          echo "label Debian"
+          echo "  kernel /vmlinuz"
+          echo "  append root=PARTUUID=${ROOT_PARTUUID} rw console=$BOOT_CONSOLE"
+          echo "  initrd /initrd.img"
+          [ -n "$FDT" ] && echo "  FDT $FDT"
+        } > /boot/extlinux/extlinux.conf
+      '
