@@ -11,8 +11,6 @@ on:
         description: "Kernel flavor (mainline, mainline-backports, vendor)"
         required: true
         default: "mainline"
-  push:
-    branches: [ main ]
 
 jobs:
   build:

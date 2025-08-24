@@ -12,7 +12,7 @@ mmdebstrap:
         apt-get clean
 
         # # --- TTY1 autologin drop-in ---
-        # USERNAME="${KSconf_device_user:-pi}"
+        # USERNAME="${KSconf_device_new_user:-pi}"
         # install -d -m 0755 /etc/systemd/system/getty@tty1.service.d
         # # Use a quoted heredoc so no stray EOF/expansions
         # cat > /etc/systemd/system/getty@tty1.service.d/override.conf <<'"'"'CONF'"'"'
