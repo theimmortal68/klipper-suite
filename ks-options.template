@@ -9,3 +9,4 @@ device_ssh_new_user=y
 device_timezone=America/New_York
 device_new_user=pi
 device_new_userpass=raspberry
+image_compression=zstd
