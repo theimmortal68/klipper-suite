@@ -1,3 +1,0 @@
-# Build defaults for CM4 class devices
-class=cm4
-storage_type=emmc
