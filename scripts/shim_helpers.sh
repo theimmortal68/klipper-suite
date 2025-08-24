@@ -24,10 +24,16 @@ _have str_split_to_vars || str_split_to_vars() {
 }
 
 _have load_json_vars || load_json_vars() {
-  # Keep the raw payload so we can fish values out later
   INJSON="$1"
   export INJSON
+  # Also extract options.config -> INCONFIG (works for "options={'config':'...'}" and JSON-ish)
+  _cfg="$(printf '%s\n' "$INJSON" | sed -n "s/.*['\"]config['\"] *: *['\"]\([^'\"]\+\)['\"].*/\1/p" | head -n1)"
+  if [ -n "$_cfg" ]; then
+    INCONFIG="$_cfg"
+    export INCONFIG
+  fi
 }
+
 
 _have KS_INLINE || KS_INLINE() {
   # Very small subset used by build.sh:
@@ -82,4 +88,41 @@ _have load_default_configs || load_default_configs() {
   fi
   export INCONFIG
   return 0
+}
+
+# Add this near the end of the shim (after other helpers):
+_have bdebstrap || bdebstrap() {
+  # If the first arg is not --ksconf, call the real bdebstrap binary
+  if [ "${1:-}" != "--ksconf" ]; then
+    command bdebstrap "$@"
+    return $?
+  fi
+
+  # Emulate the minimal --ksconf surface used by build.sh
+  shift
+  subcmd="${1:-}"; shift || true
+  case "$subcmd" in
+    runr)
+      cfg="${1:-}"; [ -n "$cfg" ] || { echo "bdebstrap --ksconf runr: missing <config>" >&2; return 2; }
+      # Prefer a ksconf-provided runner function, else try an executable
+      if declare -F ksconf_run_rootfs >/dev/null 2>&1; then
+        ksconf_run_rootfs "$cfg"
+      elif [ -x "${KSTOP}/bin/ksconf" ]; then
+        "${KSTOP}/bin/ksconf" runr "$cfg"
+      else
+        echo "No ksconf runner available for 'runr'. Ensure bin/ksconf provides it." >&2
+        return 127
+      fi
+      ;;
+    runh)
+      hook="${1:-}"; shift || true
+      [ -n "$hook" ] && [ -x "$hook" ] || { echo "bdebstrap --ksconf runh: hook '$hook' not found/executable" >&2; return 2; }
+      # Pass the rest of the args ($1..$n) to the hook
+      "$hook" "$@"
+      ;;
+    *)
+      echo "bdebstrap --ksconf: unsupported subcommand '$subcmd'" >&2
+      return 2
+      ;;
+  esac
 }
