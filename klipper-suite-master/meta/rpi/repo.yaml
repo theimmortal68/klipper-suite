@@ -1,0 +1,29 @@
+---
+name: rpi-repo
+mmdebstrap:
+  mirror: http://deb.debian.org/debian
+  variant: apt
+  packages: []
+  customize-hooks:
+    - >
+      chroot "$1" sh -eu -c '
+        set -x
+        install -d -m 0755 /usr/share/keyrings
+        # Import Raspberry Pi archive key
+        if ! [ -s /usr/share/keyrings/raspberrypi-archive.gpg ]; then
+          wget -qO /usr/share/keyrings/raspberrypi-archive.gpg https://archive.raspberrypi.org/debian/raspberrypi.gpg.key || true
+        fi
+
+        # Add raspi apt source with signed-by
+        echo "deb [signed-by=/usr/share/keyrings/raspberrypi-archive.gpg] http://archive.raspberrypi.com/debian ${KS_SUITE} main" > /etc/apt/sources.list.d/raspi.list
+
+        # Prefer Raspberry Pi origin for kernel/firmware/userland
+        mkdir -p /etc/apt/preferences.d
+        cat > /etc/apt/preferences.d/99-raspi-priority <<PREF
+        Package: *
+        Pin: origin archive.raspberrypi.com
+        Pin-Priority: 700
+        PREF
+
+        apt-get update || true
+      '

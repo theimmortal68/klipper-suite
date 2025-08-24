@@ -1,0 +1,12 @@
+# ks-options.template
+
+# ---- device ----
+device_hostname=raspberrypi
+device_keyboard_keymap=us
+device_keyboard_layout="English (US)"
+device_locale1="en_US.UTF-8"
+device_ssh_new_user=y
+device_timezone=America/New_York
+device_new_user=pi
+device_new_userpass=raspberry
+image_compression=zstd

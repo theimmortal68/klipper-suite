@@ -1,0 +1,132 @@
+name: Build rpi-image-gen image
+
+on:
+  workflow_dispatch:
+    
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      APT_LISTCHANGES_FRONTEND: none
+      NEEDRESTART_MODE: a
+
+    steps:
+      # Expand usable disk (merge / and /mnt; add swap; remove big preinstalls)
+      - name: Maximize build disk space
+        uses: easimon/maximize-build-space@v1
+        with:
+          root-reserve-mb: 512
+          swap-size-mb: 4096
+          # aggressively free space from preinstalled SDKs/images you don't use
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          # build-mount-path defaults to $GITHUB_WORKSPACE
+
+      # ensure the newly mounted workspace is writable by 'runner'
+      - name: Fix workspace ownership
+        run: sudo chown -R "$USER":"$USER" "$GITHUB_WORKSPACE"
+
+      - name: Extra cleanup (CodeQL, Docker images, cached tools, Homebrew)
+        run: |
+          set -eux
+          # CodeQL
+          sudo rm -rf /opt/hostedtoolcache/CodeQL || true
+          # Docker images
+          if command -v docker >/dev/null 2>&1; then
+            sudo docker image prune -af || true
+            sudo docker system prune -af --volumes || true
+          fi
+          # Hosted toolcache (old SDKs/toolchains)
+          sudo rm -rf /opt/hostedtoolcache/* || true
+          # Homebrew (on ubuntu images it’s under /home/linuxbrew)
+          sudo rm -rf /home/linuxbrew /home/runner/.linuxbrew || true
+          # Misc caches
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /usr/local/share/powershell || true
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # optional
+
+      - name: Install host deps from repo script
+        run: |
+          set -eux
+          sudo apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=600 update
+          sudo ./install_deps.sh
+
+      - name: Enable cross-arch emulation
+        run: |
+          set -eux
+          sudo apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=600 update
+          sudo apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=600 install -y qemu-user-static binfmt-support
+          sudo update-binfmts --enable qemu-aarch64 || true
+
+      - name: Provide Debian archive signing keys for mmdebstrap
+        run: |
+          set -eux
+          sudo apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=600 update
+          sudo apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=600 install -y debian-archive-keyring
+          mkdir -p keydir
+          cp /usr/share/keyrings/debian-archive-keyring.gpg keydir/
+          ls -l keydir
+
+      - name: Build image
+        run: |
+          set -euxo pipefail
+          ./build.sh -o ks-options.template
+          
+      - name: Stage outputs (runner-owned; no root perms)
+        if: always()
+        run: |
+          set -eux
+          rm -rf ci_out
+          mkdir -p ci_out
+          shopt -s nullglob
+          # copy deploy and logs; artefacts are uncompressed/raw, deploy has .zst
+          for d in work/*/deploy work/*/logs; do
+            [ -d "$d" ] || continue
+            img="$(basename "$(dirname "$d")")"
+            dest="ci_out/${img}/$(basename "$d")"
+            mkdir -p "$dest"
+            cp -r --no-preserve=mode,ownership,timestamps "$d/." "$dest/"
+          done
+          find ci_out -type f -print || true
+
+      - name: Create checksums for .img.zst
+        run: |
+          set -eux
+          shopt -s nullglob globstar
+          for f in ci_out/**/deploy/*.img.zst; do
+            sha256sum "$f" > "${f}.sha256"
+          done
+
+      - name: Verify .img.zst and .sha256 exist
+        run: |
+          set -eux
+          shopt -s nullglob globstar
+          files=(ci_out/**/deploy/*.img.zst)
+          [ ${#files[@]} -gt 0 ] || { echo "No .img.zst files found"; exit 1; }
+          for f in "${files[@]}"; do
+            [ -f "${f}.sha256" ] || { echo "Missing checksum for $f"; exit 1; }
+          done
+
+      - name: Publish nightly
+        uses: ncipollo/release-action@v1
+        with:
+          tag: nightly-${{ github.run_id }}
+          name: Nightly ${{ github.run_id }}
+          prerelease: true
+          allowUpdates: true
+          replacesArtifacts: true
+          artifacts: |
+            ci_out/**/deploy/*.img.zst
+            ci_out/**/deploy/*.img.zst.sha256

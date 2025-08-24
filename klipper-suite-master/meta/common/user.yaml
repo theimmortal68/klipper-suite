@@ -1,0 +1,63 @@
+---
+name: user
+mmdebstrap:
+  variant: apt
+  packages: []   # 'sudo' should be in an earlier layer
+  customize-hooks:
+    - |-
+      chroot "$1" /bin/sh -eu -c '
+        # Decide device user (must be provided) + log it
+        if [ -n "${KSconf_device_new_user:-}" ]; then
+          U="$KSconf_device_new_user"; SRC=KSconf_device_new_user
+        else
+          echo "[user hook] ERROR: KSconf_device_new_user is not set" >&2
+          exit 1
+        fi
+        echo "[user hook] Using ${SRC}='\''$U'\''' >&2
+
+        # Create the user (no idempotence guards)
+        adduser --disabled-password --gecos "" "$U"
+
+        # Optionally set password (plaintext or crypt hash)
+        if [ -n "${KSconf_device_new_userpass:-${KSconf_device_password:-}}" ]; then
+          P="${KSconf_device_new_userpass:-${KSconf_device_password}}"
+          echo "[user hook] Setting password for $U" >&2
+          case "$P" in
+            \$6\$*|\$5\$*|\$2*|\$y\$*|\$argon2*) echo "$U:$P" | chpasswd -e ;;
+            *)                                   echo "$U:$P" | chpasswd    ;;
+          esac
+        else
+          echo "[user hook] No password provided for $U" >&2
+        fi
+
+        # Lock root
+        usermod -p "*" root
+
+        # Create common hw groups (will fail if they already exist — intentional)
+        for GRP in input spi i2c gpio render; do
+          groupadd -r "$GRP"
+        done
+
+        # Add user to groups (no silent ignores)
+        for GRP in adm dialout cdrom audio users sudo video games plugdev input spi i2c gpio tty render; do
+          adduser "$U" "$GRP"
+        done
+
+        # Sudoers drop-in
+        install -d -m 0755 /etc/sudoers.d
+        printf "%%s ALL=(ALL) NOPASSWD:ALL\n" "$U" > /etc/sudoers.d/010_${U}-nopasswd
+        chmod 0440 /etc/sudoers.d/010_${U}-nopasswd
+
+        # PATH normalization for non-root shells (written without heredoc)
+        install -d -m 0755 /etc/profile.d
+        printf "%s\n" \
+          "# /etc/profile.d/01local.sh" \
+          "# Local shell customizations (POSIX sh syntax). Leave executable bit OFF." \
+          "#!/bin/sh" \
+          "if [ \"\$(id -u)\" -ne 0 ]; then" \
+          "  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games" \
+          "fi" \
+          > /etc/profile.d/01local.sh
+        # Set permissions at build time (no chmods at login)
+        chmod 0644 /etc/profile.d/01local.sh
+      '

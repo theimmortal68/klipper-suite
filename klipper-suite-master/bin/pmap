@@ -1,0 +1,209 @@
+#!/usr/bin/env python
+
+# Provisioning Map Helper
+
+import argparse
+import json
+import sys
+import uuid
+import re
+
+
+VALID_ROLES = ["boot", "system"]
+
+
+def pmap_version(data):
+    value = get_key(data, "attributes.PMAPversion")
+    if value is None:
+        # Try parsing as fully assembled image.json
+        value = get_key(data, "layout.provisionmap.attributes.PMAPversion")
+        if value is None:
+            sys.stderr.write("Error: No version\n")
+            sys.exit(1)
+
+    if isinstance(value, str):
+        pass
+    else:
+        sys.stderr.write("Error: Version is not a string\n")
+        sys.exit(1)
+
+    parts = value.split('.')
+    parts.extend(['0'] * (3 - len(parts)))
+
+    try:
+        # Return a tuple of the version components as integers
+        major = int(parts[0])
+        minor = int(parts[1])
+        patch = int(parts[2])
+        return major, minor, patch
+    except ValueError:
+        sys.stderr.write(f"Error: Invalid version format in '{value}'\n")
+        sys.exit(1)
+
+
+# Top level PMAP validator
+def validate(data):
+    major, minor, patch = pmap_version(data)
+    # TODO
+    return major, minor, patch
+
+
+# Validates a static object and returns mandatory keys
+def chk_static(data):
+    role = data.get("role")
+
+    # role: (mandatory, string)
+    if not role:
+        sys.stderr.write("Error: role is mandatory in a static object.\n")
+        sys.exit(1)
+
+    if role not in VALID_ROLES:
+        sys.stderr.write(f"Error: Invalid 'role': '{role}'. Must be one of {VALID_ROLES}.\n")
+        sys.exit(1)
+
+    # id: (optional, string)
+    if "id" in data:
+        id_val = data.get("id")
+        if not isinstance(id_val, str):
+            sys.stderr.write("Error: id is not a string.\n")
+            sys.exit(1)
+
+    # uuid: (optional, valid UUID string)
+    if "uuid" in data:
+        uuid_val = data.get("uuid")
+        if not isinstance(uuid_val, str):
+            sys.stderr.write("Error: uuid is not a string.\n")
+            sys.exit(1)
+        try:
+            uuid.UUID(uuid_val)
+        except ValueError:
+            if (re.match(r'^[0-9a-f]{8}$', uuid_val, re.IGNORECASE) or
+                re.match(r'^[0-9a-f]{4}-[0-9a-f]{4}$', uuid_val, re.IGNORECASE)):
+                pass  # Accept as valid VFAT UUID (label)
+            else:
+                sys.stderr.write(f"Error: uuid is invalid: '{uuid_val}'.\n")
+                sys.exit(1)
+
+    # Return mandatory
+    return role
+
+
+# Print slot mapping. This is retrieved from a partitions static object.
+def slotvars(data):
+    # Check for slotted system_type
+    if not any(e.get("attributes", {}).get("system_type") == "slotted" for e in data):
+        sys.stderr.write("Error: Not slotted\n")
+        sys.exit(1)
+
+    for entry in data:
+        # encrypted at the top level with slots
+        if "encrypted" in entry and "slots" in entry["encrypted"]:
+            mname = entry["encrypted"]["luks2"]["mname"]
+            slots = entry["encrypted"]["slots"]
+            for slot, slotval in slots.items():
+                for part in slotval.get("partitions", []):
+                    static = part.get("static")
+                    if static is not None:
+                        role = chk_static(static)
+                        if "id" in static:
+                            print(f"{role.upper()}{slot.upper()}_ID={mname}{static['id']}")
+                        if "uuid" in static:
+                            print(f"{role.upper()}{slot.upper()}_UUID={static['uuid']}")
+                        print(f"{role.upper()}{slot.upper()}_ENCRYPTED=y")
+
+        # slots at the top level with encapsulated unencrypted/encrypted
+        elif "slots" in entry:
+            slots = entry["slots"]
+            for slot, slotval in slots.items():
+                # Encrypted inside this slot
+                if "encrypted" in slotval:
+                    mname = slotval["encrypted"]["luks2"]["mname"]
+                    for part in slotval["encrypted"].get("partitions", []):
+                        static = part.get("static")
+                        if static is not None:
+                            role = chk_static(static)
+                            if "id" in static:
+                                print(f"{role.upper()}{slot.upper()}_ID={mname}{static['id']}")
+                            if "uuid" in static:
+                                print(f"{role.upper()}{slot.upper()}_UUID={static['uuid']}")
+                            print(f"{role.upper()}{slot.upper()}_ENCRYPTED=y")
+
+                # Unencrypted
+                for part in slotval.get("partitions", []):
+                    # Only print unencrypted if not also encrypted
+                    if "encrypted" not in slotval:
+                        static = part.get("static")
+                        if static is not None:
+                            role = chk_static(static)
+                            if "id" in static:
+                                print(f"{role.upper()}{slot.upper()}_ID={static['id']}")
+                            if "uuid" in static:
+                                print(f"{role.upper()}{slot.upper()}_UUID={static['uuid']}")
+                            print(f"{role.upper()}{slot.upper()}_ENCRYPTED=n")
+
+
+
+# Best effort general purpose JSON key retrieval
+def get_key(data, key_path, default=None):
+    keys = key_path.split('.')
+    val = data
+    for key in keys:
+        if isinstance(val, dict):
+            if key in val:
+                val = val[key]
+            else:
+                return default
+        elif isinstance(val, list):
+            # Try to interpret key as an integer index
+            try:
+                idx = int(key)
+                val = val[idx]
+            except (ValueError, IndexError):
+                # Optionally, search all items for the key
+                for item in val:
+                    if isinstance(item, dict) and key in item:
+                        val = item[key]
+                        break
+                else:
+                    return default
+        else:
+            return default
+    return val
+
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(
+            description='PMAP helper')
+
+    parser.add_argument("-f", "--file",
+                        help="Path to PMAP file",
+                        required=True)
+
+    parser.add_argument("-s", "--slotvars",
+                        action="store_true",
+                        help="Print slot map variables")
+
+    parser.add_argument("--get-key",
+                        help="Dot-separated key path to retrieve from PMAP JSON")
+
+    args = parser.parse_args()
+
+    with open(args.file) as f:
+        data = json.load(f)
+
+    major, minor, patch = validate(data)
+
+    if args.get_key:
+        value = get_key(data, args.get_key)
+        if value is None:
+            sys.exit(1)
+        else:
+            print(value)
+            sys.exit(0)
+
+    major, minor, patch = validate(data)
+
+    if args.slotvars:
+        slotvars(data)
+        sys.exit(0);
