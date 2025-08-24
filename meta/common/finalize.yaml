@@ -1,0 +1,36 @@
+---
+name: finalize
+mmdebstrap:
+  variant: apt
+  customize-hooks:
+    - |-
+      chroot "$1" /bin/sh -eu -c '
+        echo "[finalize-upgrade] dist-upgrade + cleanup"
+        apt-get update
+        DEBIAN_FRONTEND=noninteractive apt-get -y dist-upgrade
+        apt-get -y autoremove --purge
+        apt-get clean
+
+        # --- TTY1 autologin drop-in ---
+        USERNAME="${KSconf_device_user:-pi}"
+        install -d -m 0755 /etc/systemd/system/getty@tty1.service.d
+        # Use a quoted heredoc so no stray EOF/expansions
+        cat > /etc/systemd/system/getty@tty1.service.d/override.conf <<'"'"'CONF'"'"'
+        [Service]
+        # Replace the ExecStart defined by the unit with an autologin agetty
+        ExecStart=
+        ExecStart=-/sbin/agetty --autologin ${USERNAME} --noclear %I $TERM
+        CONF
+
+        # (Optional) make sure TTY1 stays on screen after boot
+        install -d -m 0755 /etc/systemd/system/getty@tty1.service.d
+        cat > /etc/systemd/system/getty@tty1.service.d/noclear.conf <<'"'"'CONF'"'"'
+        [Service]
+        TTYVTDisallocate=no
+        CONF
+
+        # Leave a marker so logs prove this ran last
+        date -u +"%Y-%m-%dT%H:%M:%SZ" > /root/.finalize-upgrade-done
+      '
+    # Ensure getty@tty1 is enabled using the standard helper (runs inside target)
+    - $BDEBSTRAP_HOOKS/enable-units "$1" getty@tty1.service

@@ -325,6 +325,7 @@ if ksconf_isy device_ssh_new_user ; then
    layer_push auto common/openssh-server
 fi
 
+layer_push auto common/finalize
 
 # hook execution
 runh()
