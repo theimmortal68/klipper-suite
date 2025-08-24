@@ -11,55 +11,52 @@ mmdebstrap:
         systemctl disable systemd-networkd 2>/dev/null
         systemctl disable systemd-resolved 2>/dev/null
         systemctl mask    systemd-resolved 2>/dev/null
+
         # NetworkManager DNS settings (no systemd-resolved)
         install -d -m 0755 /etc/NetworkManager/conf.d
-        cat > /etc/NetworkManager/conf.d/10-dns.conf <<'"'"'CONF'"'"'
-        [main]
-        dns=default
-        rc-manager=file
-        CONF
+        printf "%s\n" "[main]" "dns=default" "rc-manager=file" > /etc/NetworkManager/conf.d/10-dns.conf
 
         # Simple DHCP profile for eth0
         install -d -m 0700 /etc/NetworkManager/system-connections
-        cat > /etc/NetworkManager/system-connections/eth0.nmconnection <<'"'"'NMCONF'"'"'
-        [connection]
-        id=eth0
-        type=ethernet
-        interface-name=eth0
-        autoconnect=true
-
-        [ipv4]
-        method=auto
-
-        [ipv6]
-        addr-gen-mode=stable-privacy
-        method=auto
-        NMCONF
+        printf "%s\n" \
+          "[connection]" \
+          "id=eth0" \
+          "type=ethernet" \
+          "interface-name=eth0" \
+          "autoconnect=true" \
+          "" \
+          "[ipv4]" \
+          "method=auto" \
+          "" \
+          "[ipv6]" \
+          "addr-gen-mode=stable-privacy" \
+          "method=auto" \
+          > /etc/NetworkManager/system-connections/eth0.nmconnection
         chmod 600 /etc/NetworkManager/system-connections/eth0.nmconnection
       '
     - |-
       # write NM connection file directly using the hook's $1 (rootfs)
       F="$1/etc/NetworkManager/system-connections/can0.nmconnection"
       install -d -m 0700 "$(dirname "$F")"
-      cat > "$F" <<'EOF'
-      [connection]
-      id=can0
-      uuid=6f1d9d9c-9c0d-4b5b-9c79-2a4a7d1a1a00
-      type=can
-      autoconnect=true
-
-      [can]
-      bitrate=1000000
-      fd=false
-      listen-only=false
-      restart-ms=100
-
-      [ipv4]
-      method=disabled
-
-      [ipv6]
-      method=ignore
-      EOF
+      printf "%s\n" \
+        "[connection]" \
+        "id=can0" \
+        "uuid=6f1d9d9c-9c0d-4b5b-9c79-2a4a7d1a1a00" \
+        "type=can" \
+        "autoconnect=true" \
+        "" \
+        "[can]" \
+        "bitrate=1000000" \
+        "fd=false" \
+        "listen-only=false" \
+        "restart-ms=100" \
+        "" \
+        "[ipv4]" \
+        "method=disabled" \
+        "" \
+        "[ipv6]" \
+        "method=ignore" \
+        > "$F"
       chmod 0600 "$F"
 
       # ensure CAN modules load at boot
@@ -68,6 +65,7 @@ mmdebstrap:
         echo can_raw
         echo vcan
       } > "$1/etc/modules-load.d/can.conf"
+
     # Install boot templates (prefer /boot/firmware if present)
     - install -d -m 0755 "$(test -d "$1/boot/firmware" && echo "$1/boot/firmware" || echo "$1/boot")"
     - install -m 0644 "$KS_TEMPLATES/headless-nm/headless_nm.txt.template" "$(test -d "$1/boot/firmware" && echo "$1/boot/firmware" || echo "$1/boot")/headless_nm.txt.template"
@@ -84,7 +82,7 @@ mmdebstrap:
     - install -d -m 0755 "$1/etc/udev/rules.d"
     - install -m 0644 "$KS_TEMPLATES/udev/070-wifi-powersave.rules" "$1/etc/udev/rules.d/070-wifi-powersave.rules"
 
-    # Enable the service without systemctl (create wants/ symlink)
+    # Enable the service without systemctl (create wants/ symlink) + enable NM via helper
     - install -d -m 0755 "$1/etc/systemd/system/multi-user.target.wants"
     - ln -sfn ../headless_nm.service "$1/etc/systemd/system/multi-user.target.wants/headless_nm.service"
     - $BDEBSTRAP_HOOKS/enable-units "$1" NetworkManager
