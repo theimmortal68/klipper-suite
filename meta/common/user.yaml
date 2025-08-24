@@ -2,29 +2,35 @@
 name: user
 mmdebstrap:
   variant: apt
-  packages: []
+  packages: []   # 'sudo' should be in an earlier layer
   customize-hooks:
     - >
       chroot "$1" sh -eu -c '
-        # Decide the device user from available envs (first non-empty wins)
+        echo "[user hook] ==== FULL ENV DUMP (sorted) ====" >&2
+        env | sort >&2
+        echo "==========================================" >&2
+
+        # Decide device user (first non-empty wins) + log it
         if [ -n "${KSconf_device_new_user:-}" ]; then
-          U="$KSconf_device_new_user"
-          echo "[user hook] Using KSconf_device_new_user=$U" >&2
+          U="$KSconf_device_new_user"; SRC=KSconf_device_new_user
         elif [ -n "${KSconf_device_user:-}" ]; then
-          U="$KSconf_device_user"
-          echo "[user hook] Using KSconf_device_user=$U" >&2
+          U="$KSconf_device_user"; SRC=KSconf_device_user
         elif [ -n "${IGconf_device_user1:-}" ]; then
-          U="$IGconf_device_user1"
-          echo "[user hook] Using IGconf_device_user1=$U" >&2
+          U="$IGconf_device_user1"; SRC=IGconf_device_user1
         else
-          echo "[user hook] ERROR: no user variable set" >&2
+          echo "[user hook] ERROR: no user variable set (KSconf_device_new_user | KSconf_device_user | IGconf_device_user1)" >&2
           exit 1
         fi
+        echo "[user hook] Using $SRC='\''$U'\''" >&2
 
-        # 0) Create the user
-        adduser --disabled-password --gecos "" "$U"
+        # Create the user (guarded to avoid aborting on rebuilds)
+        if ! id -u "$U" >/dev/null 2>&1; then
+          adduser --disabled-password --gecos "" "$U"
+        else
+          echo "[user hook] User '\''$U'\'' already exists; skipping adduser" >&2
+        fi
 
-        # 1) Optionally set password
+        # Optionally set password (plaintext or crypt hash)
         if [ -n "${KSconf_device_new_userpass:-${KSconf_device_password:-}}" ]; then
           P="${KSconf_device_new_userpass:-${KSconf_device_password}}"
           echo "[user hook] Setting password for $U" >&2
@@ -33,60 +39,31 @@ mmdebstrap:
             *)                                   echo "$U:$P" | chpasswd    ;;
           esac
         else
-          echo "[user hook] No password set for $U" >&2
+          echo "[user hook] No password provided for $U" >&2
         fi
 
-        # 2) Lock root
+        # Lock root
         usermod -p "*" root
 
-        # 3) Ensure common hw groups exist
+        # Ensure common hw groups exist (ignore if already present)
         for GRP in input spi i2c gpio render; do
-          groupadd -r "$GRP"
+          groupadd -r "$GRP" 2>/dev/null || true
         done
 
-        # 4) Add user to groups
+        # Add user to groups (ignore if already a member)
         for GRP in adm dialout cdrom audio users sudo video games plugdev input spi i2c gpio tty render; do
-          adduser "$U" "$GRP"
+          adduser "$U" "$GRP" >/dev/null 2>&1 || true
         done
 
-        # 5) Sudoers drop-in
+        # Sudoers drop-in (no visudo to dodge CI ownership quirks)
         install -d -m 0755 /etc/sudoers.d
         printf "%s ALL=(ALL) NOPASSWD:ALL\n" "$U" >/etc/sudoers.d/010_"$U"-nopasswd
         chmod 0440 /etc/sudoers.d/010_"$U"-nopasswd
         chown root:root /etc/sudoers.d/010_"$U"-nopasswd
 
-        # 6) PATH normalization
+        # PATH normalization for non-root shells
         install -d -m 0755 /etc/profile.d
-        cat <<'"'"'SH'"'"' >/etc/profile.d/01local.sh
-        #!/bin/sh
-        if [ "$(id -u)" -ne 0 ]; then
-          PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games
-        fi
-        SH
-        chmod 0644 /etc/profile.d/01local.sh
-      '        install -d -m 0755 /etc/sudoers.d
-        cat >/etc/sudoers.d/010_"$U"-nopasswd <<EOF
-        $U ALL=(ALL) NOPASSWD:ALL
-        EOF
-        chmod 0440 /etc/sudoers.d/010_"$U"-nopasswd
-        sh -eu -c "command -v visudo >/dev/null && visudo -cf /etc/sudoers.d/010_\"$U\"-nopasswd || true"
-
-        # 6) PATH normalization for non-root shells
-        install -d -m 0755 /etc/profile.d
-        cat >/etc/profile.d/01local.sh <<'"'"'SH'"'"'
-        #!/bin/sh
-        if [ "$(id -u)" -ne 0 ]; then
-          PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games
-        fi
-        SH
-        chmod 0644 /etc/profile.d/01local.sh
-      '        EOF
-        chmod 0440 /etc/sudoers.d/010_"$U"-nopasswd
-        sh -eu -c "command -v visudo >/dev/null && visudo -cf /etc/sudoers.d/010_\"$U\"-nopasswd || true"
-
-        # 6) PATH normalization for non-root shells
-        install -d -m 0755 /etc/profile.d
-        cat >/etc/profile.d/01local.sh <<'"'"'SH'"'"'
+        cat > /etc/profile.d/01local.sh <<'\''SH'\''
         #!/bin/sh
         if [ "$(id -u)" -ne 0 ]; then
           PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games
