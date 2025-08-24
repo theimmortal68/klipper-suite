@@ -27,8 +27,6 @@ on:
         description: "Create a prerelease (nightly) from artifacts"
         required: false
         default: "false"
-  push:
-    branches: [ master ]
 
 jobs:
   generate-matrix:
