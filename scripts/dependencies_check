@@ -14,7 +14,7 @@ dependencies_check()
 
 	for depfile in "$@"; do
 		if [[ -e "$depfile" ]]; then
-			deps="$(sed -f "${IGTOP}/scripts/remove-comments.sed" < "$depfile")"
+			deps="$(sed -f "${KSTOP}/scripts/remove-comments.sed" < "$depfile")"
 		fi
 		for dep in $deps; do
 			if ! hash "${dep%:*}" 2>/dev/null; then

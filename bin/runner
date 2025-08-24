@@ -7,10 +7,10 @@ shift 1
 
 # Execute scripts from within these dirs in this order
 dirs=()
-dirs+=("${IGIMAGE}/bdebstrap")
-dirs+=("${IGDEVICE}/bdebstrap")
+dirs+=("${KSIMAGE}/bdebstrap")
+dirs+=("${KSDEVICE}/bdebstrap")
 [[ -n ${KSconf_ext_dir+x} ]] && dirs+=("${KSconf_ext_dir}/bdebstrap")
-dirs+=("${IGTOP}/scripts/bdebstrap")
+dirs+=("${KSTOP}/scripts/bdebstrap")
 
 case "$op" in
    setup|extract|essential|customize|cleanup)
