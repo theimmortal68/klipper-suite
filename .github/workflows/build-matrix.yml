@@ -18,7 +18,7 @@ on:
       devices:
         description: "Comma/space-separated device list (pi5, pi4, cm4, cm5, zero2w, opi5max)"
         required: false
-        default: "pi5, pi4, cm4, cm5, zero2w, opi5max"
+        default: "pi5"
       profiles:
         description: "Comma/space-separated profiles to build (base, mainsailos, ratos)"
         required: false
@@ -27,8 +27,6 @@ on:
         description: "Create a prerelease (nightly) from artifacts"
         required: false
         default: "false"
-  push:
-    branches: [ master ]
 
 jobs:
   generate-matrix:
