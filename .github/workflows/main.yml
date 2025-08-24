@@ -121,17 +121,14 @@ jobs:
             [ -f "${f}.sha256" ] || { echo "Missing checksum for $f"; exit 1; }
           done
 
-      - name: Create/update release with assets
+      - name: Publish nightly
         uses: ncipollo/release-action@v1
         with:
-          tag: nightly-17117144206
-          name: Nightly 17117144206
-          allowUpdates: true
-          draft: false
+          tag: nightly-${{ github.run_id }}
+          name: Nightly ${{ github.run_id }}
           prerelease: true
+          allowUpdates: true
+          replacesArtifacts: true
           artifacts: |
             ci_out/**/deploy/*.img.zst
             ci_out/**/deploy/*.img.zst.sha256
-          artifactErrorsFailBuild: true
-          generateReleaseNotes: false
-          makeLatest: legacy
